@@ -4,11 +4,12 @@ import { exec } from 'child_process';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 import icon from '../../resources/icon.png?asset';
 import axios from 'axios';
-import fs from 'fs';
+import fs from 'fs-extra';
 import path from 'path';
 import Seven from 'node-7z';
 import sevenBin from '7zip-bin';
-import Store from 'electron-store'
+import Store from 'electron-store';
+
 const store = new Store({
 
   clearInvalidConfig: true, 
@@ -108,7 +109,15 @@ app.whenReady().then(() => {
   ipcMain.on('ping', () => console.log('pong'))
   
 
+ipcMain.handle('remove-directory', async (event, dirPath) => {
+  try {
+    // emptyDir 会清空内容但保留目录，remove 会连同目录一起删除
+    await fs.remove(dirPath); 
 
+  } catch (err) {
+    console.error('删除目录失败:', err);
+  }
+});
   ipcMain.handle('open-file', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openFile'],

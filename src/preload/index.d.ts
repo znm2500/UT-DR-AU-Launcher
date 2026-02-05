@@ -11,6 +11,7 @@ declare global {
       openFolder: () => Promise<string>
       getStoreValue: (key: string, value?: any) => Promise<any>,
       setStoreValue: (key: string, value: any) => Promise<void>
+      deleteFolder: (path: string) => Promise<void>
     }
   }
 }

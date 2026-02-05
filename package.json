@@ -26,6 +26,7 @@
     "adm-zip": "^0.5.16",
     "axios": "^1.13.4",
     "electron-store": "^8.1.0",
+    "fs-extra": "^11.3.3",
     "node-7z": "^3.0.0"
   },
   "devDependencies": {
@@ -47,8 +48,8 @@
     "vue-tsc": "^3.1.6"
   },
   "build": {
-  "asarUnpack": [
-    "**/node_modules/7zip-bin/**/*"
-  ]
-}
+    "asarUnpack": [
+      "**/node_modules/7zip-bin/**/*"
+    ]
+  }
 }

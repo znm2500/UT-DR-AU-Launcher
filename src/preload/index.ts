@@ -15,6 +15,8 @@ api.downloadGame= (url: string, destDir: string, filename: string) => ipcRendere
 api.launchGame = (path: string) => ipcRenderer.invoke('launch-game', path);
 api.getdownloadpath = () => ipcRenderer.invoke('get-download-path');
 api.openFolder = () => ipcRenderer.invoke('open-folder');
+api.deleteFolder = (path) => ipcRenderer.invoke('remove-directory', path);
+
 // 修复：正确传递key和value两个参数
 api.getStoreValue = (key, value) => ipcRenderer.invoke('get-store-value', key, value);
 api.setStoreValue = (key, value) => ipcRenderer.invoke('set-store-value', key, value);

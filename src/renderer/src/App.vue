@@ -35,7 +35,7 @@ const I18N = {
         settings_browse: "浏览",
         settings_save: "保存",
         settings_cancel: "取消",
-        confirm_del: "确定从列表中移除或重置该项吗？",
+        confirm_del: "确定从列表中删除",
         confirm_yes: "是",
         confirm_no: "否",
         prompt_import_name: "游戏名称:",
@@ -70,7 +70,7 @@ const I18N = {
         settings_browse: "Browse",
         settings_save: "Save",
         settings_cancel: "Cancel",
-        confirm_del: "Are you sure to remove or reset this item?",
+        confirm_del: "Are you sure to delete ",
         confirm_yes: "Yes",
         confirm_no: "No",
         prompt_import_name: "Game Name:",
@@ -125,7 +125,6 @@ const selectedIndex = ref(0);
 const visibleCount = ref(5);
 const downloadIdSet = new Set();
 const showConfirmDelete = ref(false);
-const gameToDelete = ref<any>(null);
 
 const showSettings = ref(false);
 const settingsForm = reactive({
@@ -149,7 +148,6 @@ function forceRender() {
 // 动态背景样式 [新增]
 const appBackgroundStyle = computed(() => {
     if (settings.value.backgroundImage) {
-        console.log('settings.value.backgroundImage', settings.value.backgroundImage);
         return { backgroundImage: `url(${settings.value.backgroundImage})` };
     }
     return {}; // 默认使用 CSS 里的 background.gif
@@ -287,7 +285,6 @@ function importGame() {
 
 function confirmDelete() {
     if (activeGame.value && activeGame.value.type === 'local') {
-        gameToDelete.value = activeGame.value;
         showConfirmDelete.value = true;
         playSfx('confirm');
     }
@@ -295,11 +292,18 @@ function confirmDelete() {
 
 function performDelete() {
     playSfx('confirm');
-    userGames.value = userGames.value.filter(g => g.id !== gameToDelete.value.id);
+    let execution_path;
+    userGames.value = userGames.value.filter((g) => {
+        if(g.id === activeGame.value.id) {
+            execution_path = g.execution_path;
+            return false;
+        }
+        return true;
+    });
     selectedIndex.value = 0;
     showConfirmDelete.value = false;
-    gameToDelete.value = null;
     (async () => {
+        await window.api.deleteFolder(execution_path.split('/').slice(0, -1).join('/'));
         await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
     })();
 }
@@ -307,7 +311,6 @@ function performDelete() {
 function cancelDelete() {
     playSfx('cancel');
     showConfirmDelete.value = false;
-    gameToDelete.value = null;
 }
 
 function browseGamePath() {
@@ -385,7 +388,6 @@ function saveSettings() {
         } else {
             // 如果没有新图片，直接保存
             (async () => {
-                console.log(JSON.parse(JSON.stringify(userGames.value)));
                 await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
             })();
         }
@@ -509,7 +511,7 @@ onMounted(async () => {
         <div id="confirm-overlay" :class="{ show: showConfirmDelete }">
             <div class="confirm-card">
                 <div class="confirm-body">{{ lang.confirm_del }} <span id="confirm-game-name">{{ currentLang === 'en' ?
-                    gameToDelete?.en_name : gameToDelete?.zh_name }}</span>?</div>
+                    activeGame?.en_name : activeGame?.zh_name }}</span>?</div>
                 <div class="confirm-actions">
                     <div class="btn enabled" @click="performDelete">{{ lang.confirm_yes }}</div>
                     <div class="btn" @click="cancelDelete">{{ lang.confirm_no }}</div>
@@ -965,6 +967,18 @@ onMounted(async () => {
     font-size: 1.3rem;
     min-height: 60px;
     word-break: break-all;
+}
+
+/* 错误弹窗按钮样式 */
+.error-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+.error-actions .btn {
+    font-size: 1.6rem;
+    padding: 10px 25px;
 }
 
 input[type="radio"] {
