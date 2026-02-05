@@ -10,16 +10,17 @@ const api: any = {};
 console.log('--- Preload 脚本正在加载 ---');
 // Expose a safe API to get game data (uses cache via electron-store)
 
-api.openFile = () => ipcRenderer.invoke('open-file');
+api.openFile = (custom_name,extensions) => ipcRenderer.invoke('open-file',custom_name,extensions);
 api.downloadGame= (url: string, destDir: string, filename: string) => ipcRenderer.invoke('download-and-extract', url, destDir, filename);
 api.launchGame = (path: string) => ipcRenderer.invoke('launch-game', path);
 api.getdownloadpath = () => ipcRenderer.invoke('get-download-path');
 api.openFolder = () => ipcRenderer.invoke('open-folder');
 api.deleteFolder = (path) => ipcRenderer.invoke('remove-directory', path);
-
-// 修复：正确传递key和value两个参数
+api.getAUPData = (path) => ipcRenderer.invoke('get-aup-data',path);
+api.saveFile = (name, extensions) => ipcRenderer.invoke('save-file', name, extensions);
 api.getStoreValue = (key, value) => ipcRenderer.invoke('get-store-value', key, value);
 api.setStoreValue = (key, value) => ipcRenderer.invoke('set-store-value', key, value);
+api.exportGame = (gamesToExport, saveDir) => ipcRenderer.invoke('export-game', gamesToExport, saveDir);
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
 // just add to the DOM global.

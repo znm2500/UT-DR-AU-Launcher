@@ -4,14 +4,17 @@ declare global {
   interface Window {
     electron: ElectronAPI
     api: {
-      openFile: () => Promise<string>,
+      openFile: (custom_name:string,extensions:any) => Promise<string>,
       launchGame: (path: string) => Promise<void>,
       downloadGame: (url: string, destDir: string, filename: string) => Promise<void>,
       getdownloadpath: () => string,
       openFolder: () => Promise<string>
       getStoreValue: (key: string, value?: any) => Promise<any>,
-      setStoreValue: (key: string, value: any) => Promise<void>
-      deleteFolder: (path: string) => Promise<void>
+      setStoreValue: (key: string, value: any) => Promise<void>,
+      deleteFolder: (path: string) => Promise<void>,
+      getAUPData : (path:string) => Promise<any>,
+      saveFile: (name: string, extensions: string[]) => Promise<string>,
+      exportGame: (gamesToExport: any[], saveDir: string) => Promise<any>,
     }
   }
 }

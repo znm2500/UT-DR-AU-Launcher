@@ -2,18 +2,18 @@
 import { ref, reactive, onMounted, computed, watch, toRaw } from 'vue'
 import soulIcon from './assets/spr_soul.png'
 
-
 const availableLanguages = [
     { code: 'en', label: 'English' },
     { code: 'zh', label: '中文' }
-    // Add future languages here easily
 ];
+
 // --- I18N ---
 const I18N = {
     zh: {
         ok: "确定",
         search: "搜索AU...",
         import: "[ 导入 ]",
+        export: "[ 导出 ]",
         delete: "[ 删除 ]",
         play: "[ 游玩 ]",
         download: "[ 前往下载 ]",
@@ -26,7 +26,7 @@ const I18N = {
         settings_lang_label: "语言",
         settings_import_name_label: "本地游戏名称",
         settings_import_image_label: "本地游戏图片",
-        settings_bg_image_label: "启动器背景图片", // [新增]
+        settings_bg_image_label: "启动器背景图片",
         settings_choose_image: "选择图片",
         settings_image_not_chosen: "(未选择)",
         settings_image_current: "(当前图片)",
@@ -43,12 +43,22 @@ const I18N = {
         alert_opening_url: "正在打开下载页面",
         placeholder_game_name: "游戏名称",
         placeholder_download_path: "/path/to/downloads",
-        load_more: "↓ 加载更多"
+        load_more: "↓ 加载更多",
+        name_exe: "执行程序",
+        name_aup: "同人包",
+        export_title: "导出游戏 (.aup)",
+        export_select_label: "请选择要导出的游戏 (可多选):",
+        export_confirm: "导出选中项",
+        exporting: "正在导出...",
+        export_success: "所有导出任务已完成!",
+        success: "成功",
+        select_export_dir: "请选择导出文件的保存目录"
     },
     en: {
         ok: "OK",
         search: "SEARCH AU...",
         import: "[ IMPORT ]",
+        export: "[ EXPORT ]",
         delete: "[ DELETE ]",
         play: "[ PLAY ]",
         download: "[ DOWNLOAD ]",
@@ -61,7 +71,7 @@ const I18N = {
         settings_lang_label: "Language",
         settings_import_name_label: "Local Game Name",
         settings_import_image_label: "Local Game Image",
-        settings_bg_image_label: "Launcher Background Image", // [新增]
+        settings_bg_image_label: "Launcher Background Image",
         settings_choose_image: "Choose Image",
         settings_image_current: "(Current Image)",
         settings_image_not_chosen: "(Not chosen)",
@@ -78,7 +88,16 @@ const I18N = {
         alert_opening_url: "Opening download page for",
         placeholder_game_name: "Game name",
         placeholder_download_path: "/path/to/downloads",
-        load_more: "↓ SHOW MORE"
+        load_more: "↓ SHOW MORE",
+        name_exe: "Execution File",
+        name_aup: "Another Universe Package",
+        export_title: "Export Game (.aup)",
+        export_select_label: "Select games to export (Multi-select):",
+        export_confirm: "Export Selected",
+        exporting: "Exporting...",
+        export_success: "All exports finished!",
+        success: "Success",
+        select_export_dir: "Select directory to save files"
     }
 };
 
@@ -88,7 +107,8 @@ function initSfx() {
     const SFX_PATHS = {
         confirm: './src/assets/sfx/confirm.wav',
         cancel: './src/assets/sfx/cancel.wav',
-        switch: './src/assets/sfx/switch.wav'
+        switch: './src/assets/sfx/switch.wav',
+        save: './src/assets/sfx/save.wav'
     };
     try {
         for (const k of Object.keys(SFX_PATHS)) {
@@ -115,7 +135,7 @@ const GITHUB_GAMES = ref<any[]>([]);
 const userGames = ref<any[]>([]);
 const settings = ref({
     downloadPath: '',
-    backgroundImage: '', // 这里存储图片的 DataURL 或路径
+    backgroundImage: '',
     lang: 'en',
     gamePath: ''
 });
@@ -131,13 +151,18 @@ const settingsForm = reactive({
     name: '',
     image: null as File | null,
     imageName: '',
-    bgImage: null as File | null, // [新增]
-    bgImageName: '', // [新增]
+    bgImage: null as File | null,
+    bgImageName: '',
     downloadPath: '',
     gamePath: '',
     lang: 'en'
 });
 
+// 导出相关状态
+const showExportModal = ref(false);
+const selectedExportIds = ref<Set<string>>(new Set());
+const isExporting = ref(false);
+const errorTitle = ref('');
 
 // --- Computed Properties ---
 const lang = computed(() => I18N[currentLang.value] || I18N.en);
@@ -145,12 +170,12 @@ function forceRender() {
     force_render_key.value++;
 }
 
-// 动态背景样式 [新增]
+// 动态背景样式
 const appBackgroundStyle = computed(() => {
     if (settings.value.backgroundImage) {
         return { backgroundImage: `url(${settings.value.backgroundImage})` };
     }
-    return {}; // 默认使用 CSS 里的 background.gif
+    return {};
 });
 
 const fullList = computed(() => {
@@ -176,8 +201,7 @@ const filteredList = computed(() => {
             if (g[k] && g[k].toLowerCase().includes(query)) return true;
         }
         return false;
-    }
-    );
+    });
 });
 
 const visibleList = computed(() => {
@@ -185,6 +209,10 @@ const visibleList = computed(() => {
 });
 
 const activeGame = computed(() => filteredList.value[selectedIndex.value] || null);
+
+const localUserGames = computed(() => {
+    return userGames.value.filter(g => g.type === 'local');
+});
 
 // --- Methods ---
 
@@ -195,20 +223,20 @@ function selectGame(index: number) {
 
 const showErrorModal = ref(false);
 const errorMessage = ref('');
+
 function browseDownloadPath() {
     playSfx('confirm');
     (async () => {
-
         const result = await window.api.openFolder();
-
         if (result) {
-
             settingsForm.downloadPath = result;
         }
     })();
 }
-function triggerError(msg: string) {
-    playSfx('cancel');
+
+function triggerDialog(msg: string, title: string,sfx: string = 'error') {
+    playSfx(sfx);
+    errorTitle.value = title;
     errorMessage.value = msg;
     showErrorModal.value = true;
 }
@@ -235,9 +263,8 @@ function handleAction() {
         if (activeGame.value.type === 'local') {
             try {
                 await window.api.launchGame(activeGame.value.execution_path);
-
             } catch (err: any) {
-                triggerError(`${err}`);
+                triggerDialog(`${err}`, lang.value.error);
                 activeGame.value.playable = false;
                 await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
             }
@@ -256,14 +283,13 @@ function handleAction() {
                 downloadIdSet.delete(game_temp.id);
                 await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
             } catch (err: any) {
-                triggerError(`${err}`);
+                triggerDialog(`${err}`, lang.value.error);
                 activeGame.value.type = 'remote';
                 downloadIdSet.delete(activeGame.value.id);
                 forceRender();
             }
         }
-    }
-    )();
+    })();
 }
 
 function importGame() {
@@ -285,6 +311,53 @@ function importGame() {
     }
 }
 
+// 导出功能方法
+function openExportModal() {
+    if (localUserGames.value.length === 0) return;
+    playSfx('confirm');
+    selectedExportIds.value.clear();
+    showExportModal.value = true;
+}
+
+function toggleExportSelection(id: string) {
+    if (isExporting.value) return;
+    playSfx('switch');
+    if (selectedExportIds.value.has(id)) {
+        selectedExportIds.value.delete(id);
+    } else {
+        selectedExportIds.value.add(id);
+    }
+}
+
+function cancelExport() {
+    playSfx('cancel');
+    showExportModal.value = false;
+}
+
+function performExport() {
+    if (selectedExportIds.value.size === 0) return;
+
+    playSfx('confirm');
+
+    (async () => {
+        try {
+            const saveDir = await window.api.saveFile(lang.value.name_aup, ['aup']);
+            if (!saveDir) return;
+            console.log('Exported to', saveDir);
+            isExporting.value = true;
+            const gamesToExport = localUserGames.value.filter(g => selectedExportIds.value.has(g.id));
+            await window.api.exportGame(JSON.parse(JSON.stringify(gamesToExport)), saveDir);
+            
+            triggerDialog(lang.value.export_success, lang.value.success,'save');
+        } catch (err: any) {
+            triggerDialog(`${err}`, lang.value.error);
+        } finally {
+            isExporting.value = false;
+        }
+    })();
+}
+
+
 function confirmDelete() {
     if (activeGame.value && activeGame.value.type === 'local') {
         showConfirmDelete.value = true;
@@ -305,7 +378,7 @@ function performDelete() {
     selectedIndex.value = 0;
     showConfirmDelete.value = false;
     (async () => {
-        await window.api.deleteFolder(execution_path.split('/').slice(0, -1).join('/'));
+        await window.api.deleteFolder(execution_path);
         await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
     })();
 }
@@ -318,7 +391,7 @@ function cancelDelete() {
 function browseGamePath() {
     playSfx('confirm');
     (async () => {
-        const result = await window.api.openFile();
+        const result = await window.api.openFile(lang.value.name_exe, ['exe']);
         if (result) {
             settingsForm.gamePath = result;
         }
@@ -328,17 +401,11 @@ function browseGamePath() {
 
 function openSettings() {
     playSfx('confirm');
-
-    // --- 核心修改：将当前生效的 settings 同步到表单中 ---
     settingsForm.downloadPath = settings.value.downloadPath;
     settingsForm.lang = settings.value.lang;
-
-
-    settingsForm.name = activeGame.value.name[currentLang.value]; // 填入当前名称
+    settingsForm.name = activeGame.value.name[currentLang.value];
     settingsForm.gamePath = activeGame.value.execution_path;
-
-    // 背景图逻辑
-    settingsForm.bgImage = null; // 重置新选择的文件对象
+    settingsForm.bgImage = null;
     settingsForm.bgImageName = settings.value.backgroundImage
         ? lang.value.settings_image_current
         : lang.value.settings_image_not_chosen;
@@ -347,10 +414,9 @@ function openSettings() {
         : lang.value.settings_image_not_chosen;
     showSettings.value = true;
 }
-function saveSettings() {
-    playSfx('confirm');
 
-    // 1. 同步非图片数据
+function saveSettings() {
+    playSfx('save');
     settings.value.downloadPath = settingsForm.downloadPath;
     activeGame.value.name[currentLang.value] = settingsForm.name;
     settings.value.lang = settingsForm.lang;
@@ -363,30 +429,24 @@ function saveSettings() {
             const reader = new FileReader();
             reader.onload = async (e) => {
                 activeGame.value.img = e.target?.result as string;
-                // 确保图片转码完成后再执行持久化
                 await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
             };
             reader.readAsDataURL(settingsForm.image);
         } else {
-            // 如果没有新图片，直接保存
             (async () => {
                 await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
             })();
         }
     }
     showSettings.value = false;
-    // 2. 处理图片异步保存
     if (settingsForm.bgImage) {
         const reader = new FileReader();
         reader.onload = async (e) => {
             settings.value.backgroundImage = e.target?.result as string;
-            // 确保图片转码完成后再执行持久化
             await window.api.setStoreValue('settings', toRaw(settings.value));
-
         };
         reader.readAsDataURL(settingsForm.bgImage);
     } else {
-        // 如果没有新图片，直接保存
         (async () => {
             await window.api.setStoreValue('settings', toRaw(settings.value));
         })();
@@ -406,7 +466,6 @@ function handleFileSelect(e: Event) {
     }
 }
 
-// [新增] 处理背景图片选择
 function handleBgFileSelect(e: Event) {
     const input = e.target as HTMLInputElement;
     if (input.files && input.files[0]) {
@@ -432,8 +491,7 @@ onMounted(async () => {
 
     (async () => {
         try {
-            //  const res = await fetch('https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/game_index.json');
-            const res = await fetch('https://raw.githubusercontent.com/znm2500/AU-Launcher-Repo/data/game_index.json');
+            const res = await fetch('https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/game_index.json');
             if (res.ok) {
                 GITHUB_GAMES.value = await res.json();
             }
@@ -476,13 +534,16 @@ onMounted(async () => {
 
         <div class="footer">
             <div class="btn enabled" @click="importGame">{{ lang.import }}</div>
+            <div :class="['btn', { enabled: localUserGames.length > 0, disabled: localUserGames.length === 0 }]"
+                @click="openExportModal">{{ lang.export }}</div>
+
             <div class="btn enabled" @click="openSettings">{{ lang.settings }}</div>
             <div :class="['btn', { enabled: activeGame && activeGame.type === 'local', disabled: !activeGame || activeGame.type !== 'local' }]"
                 @click="confirmDelete">{{ lang.delete }}</div>
             <div :class="['btn', 'main', {
                 enabled: activeGame,
                 disabled: !activeGame,
-                downloading: activeGame?.type === 'downloading' // [新增] 添加这个类名
+                downloading: activeGame?.type === 'downloading'
             }]" @click="handleAction">
                 {{ activeGame ? (activeGame.type === 'local' ? (activeGame.playable ? lang.play : '[ --- ]') :
                     activeGame.type === 'downloading' ? `[
@@ -497,6 +558,33 @@ onMounted(async () => {
                 <div class="confirm-actions">
                     <div class="btn enabled" @click="performDelete">{{ lang.confirm_yes }}</div>
                     <div class="btn" @click="cancelDelete">{{ lang.confirm_no }}</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="export-overlay" :class="{ show: showExportModal }">
+            <div class="settings-card">
+                <div class="settings-title">{{ lang.export_title }}</div>
+                <div class="settings-body" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+                    <label style="margin-bottom: 10px;">{{ lang.export_select_label }}</label>
+
+                    <div class="export-list-container">
+                        <div v-for="g in localUserGames" :key="g.id"
+                            :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
+                            @click="toggleExportSelection(g.id)">
+                            <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]' }}</span>
+                            {{ g.name[currentLang] }}
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-actions">
+                    <div :class="['btn', { enabled: !isExporting && selectedExportIds.size > 0, disabled: isExporting || selectedExportIds.size === 0 }]"
+                        @click="performExport">
+                        {{ lang.export_confirm }}
+                    </div>
+                    <div :class="['btn', { enabled: !isExporting, disabled: isExporting }]" @click="cancelExport">
+                        {{ lang.settings_cancel }}
+                    </div>
                 </div>
             </div>
         </div>
@@ -519,10 +607,10 @@ onMounted(async () => {
                     <div style="display:flex;gap:8px;align-items:center;">
                         <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
                             lang.settings_choose_image
-                            }}</label>
+                        }}</label>
                         <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                             settingsForm.bgImageName
-                            }}</div>
+                        }}</div>
                     </div>
                     <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                         accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
@@ -543,7 +631,7 @@ onMounted(async () => {
                                 lang.settings_choose_image }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                                 settingsForm.imageName
-                            }}</div>
+                                }}</div>
                         </div>
                         <input type="file" id="setting-game-image-input" @change="handleFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
@@ -565,7 +653,7 @@ onMounted(async () => {
         <div id="error-overlay" :class="{ show: showErrorModal }">
             <div class="error-card">
                 <div class="error-header">
-                    <span class="error-title">{{ lang.error }}</span>
+                    <span class="error-title">{{ errorTitle }}</span>
                 </div>
                 <div class="error-body">
                     {{ errorMessage }}
@@ -579,6 +667,8 @@ onMounted(async () => {
 </template>
 
 <style>
+/* ... (之前的样式保持不变) ... */
+
 @font-face {
     font-family: 'fzxs';
     src: url('./assets/fzxs.ttf') format('truetype');
@@ -610,7 +700,6 @@ onMounted(async () => {
     overflow: hidden;
     user-select: none;
     transition: background-image 0.5s ease-in-out;
-    /* 背景切换平滑一点 */
 }
 
 /* --- 顶部栏 --- */
@@ -620,7 +709,6 @@ onMounted(async () => {
     margin-top: 30px;
     display: flex;
     justify-content: center;
-    /* Changed from space-between to center */
     align-items: center;
 }
 
@@ -634,7 +722,6 @@ onMounted(async () => {
     padding: 5px 10px;
     outline: none;
     text-align: center;
-    /* Optional: Centers text inside the box too, consistent with retro RPGs */
 }
 
 .lang-btn {
@@ -775,7 +862,7 @@ onMounted(async () => {
     border-top: 5px solid white;
     display: flex;
     justify-content: center;
-    gap: 60px;
+    gap: 40px;
     font-size: 1.6rem;
     background: black;
 }
@@ -815,10 +902,8 @@ onMounted(async () => {
 
 .btn.downloading {
     color: #fff !important;
-    /* 下载中显示橙色，且强制不被 hover 覆盖 */
     cursor: default;
     pointer-events: none;
-    /* 关键：禁用所有鼠标事件，包括 hover 效果和点击 */
     opacity: 0.8;
 }
 
@@ -837,7 +922,6 @@ onMounted(async () => {
     outline: none;
     cursor: pointer;
     appearance: none;
-    /* Removes default OS arrow */
     -webkit-appearance: none;
     background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
     background-repeat: no-repeat;
@@ -847,7 +931,6 @@ onMounted(async () => {
 
 .retro-select:hover {
     background-color: #222;
-    /* Slight highlight on hover */
 }
 
 .retro-select option {
@@ -859,7 +942,8 @@ onMounted(async () => {
 /* 模态框通用样式 */
 #confirm-overlay,
 #settings-overlay,
-#error-overlay {
+#error-overlay,
+#export-overlay {
     position: fixed;
     inset: 0;
     display: flex;
@@ -874,7 +958,8 @@ onMounted(async () => {
 
 #confirm-overlay.show,
 #settings-overlay.show,
-#error-overlay.show {
+#error-overlay.show,
+#export-overlay.show {
     opacity: 1;
     pointer-events: auto;
 }
@@ -905,19 +990,22 @@ onMounted(async () => {
     padding-right: 10px;
 }
 
-/* 滚动条样式 */
+/* 全局滚动条样式定义，包含 export-list */
 #game-list::-webkit-scrollbar,
-.scrollable-settings::-webkit-scrollbar {
+.scrollable-settings::-webkit-scrollbar,
+.export-list-container::-webkit-scrollbar {
     width: 10px;
 }
 
 #game-list::-webkit-scrollbar-track,
-.scrollable-settings::-webkit-scrollbar-track {
+.scrollable-settings::-webkit-scrollbar-track,
+.export-list-container::-webkit-scrollbar-track {
     background: #000;
 }
 
 #game-list::-webkit-scrollbar-thumb,
-.scrollable-settings::-webkit-scrollbar-thumb {
+.scrollable-settings::-webkit-scrollbar-thumb,
+.export-list-container::-webkit-scrollbar-thumb {
     background: #fff;
 }
 
@@ -942,7 +1030,7 @@ onMounted(async () => {
 
 .error-title {
     font-size: 1.8rem;
-    color: #FF0000;
+    color: white;
 }
 
 .error-body {
@@ -951,7 +1039,6 @@ onMounted(async () => {
     word-break: break-all;
 }
 
-/* 错误弹窗按钮样式 */
 .error-actions {
     display: flex;
     justify-content: flex-end;
@@ -965,5 +1052,42 @@ onMounted(async () => {
 
 input[type="radio"] {
     margin-right: 5px;
+}
+
+/* 修改：导出列表固定高度并允许滚动 */
+.export-list-container {
+    border: 2px solid #333;
+    padding: 5px;
+    /* 关键属性：固定高度 + 垂直滚动 */
+    height: 300px;
+    overflow-y: auto;
+    background: black;
+}
+
+.export-item {
+    padding: 10px 15px;
+    border: 2px solid transparent;
+    cursor: pointer;
+    font-size: 1.3rem;
+    transition: all 0.2s;
+    color: #aaa;
+    display: flex;
+    align-items: center;
+    /* 防止单行文字过长溢出 */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.export-item:hover {
+    color: white;
+    background: #111;
+}
+
+.export-item.selected {
+    border: 2px solid white;
+    color: white;
+    background: #222;
+    box-shadow: 0 0 5px rgba(255, 255, 255, 0.2);
 }
 </style>

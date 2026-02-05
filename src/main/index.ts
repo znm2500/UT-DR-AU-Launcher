@@ -9,48 +9,41 @@ import path from 'path';
 import Seven from 'node-7z';
 import sevenBin from '7zip-bin';
 import Store from 'electron-store';
-
+let JSON_AUP;
 const store = new Store({
 
-  clearInvalidConfig: true, 
+  clearInvalidConfig: true,
 })
 function getdownloadpath(): string {
   return app.getPath('downloads');
 }
 async function downloadFile(url: string, destPath: string): Promise<void> {
   const writer = fs.createWriteStream(destPath);
-  
   const response = await axios({
     url,
     method: 'GET',
     responseType: 'stream',
   });
-
   response.data.pipe(writer);
-
   return new Promise<void>((resolve, reject) => {
     // 明确告诉 resolve 不需要参数
-    writer.on('finish', () => resolve()); 
+    writer.on('finish', () => resolve());
     writer.on('error', (err) => reject(err));
   });
 }
 async function extract7z(archivePath, outputDir) {
-  // 必须手动替换二进制路径
-  const pathTo7zip = sevenBin.path7za;
-
   const stream = Seven.extractFull(archivePath, outputDir, {
-    $bin: pathTo7zip,
-    
-  });
+    $bin: sevenBin.path7za
 
+  });
   return new Promise<void>((resolve, reject) => {
-  stream.on('end', () => resolve()); // 现在这里不传参数就不会报错了
-  stream.on('error', (err) => reject(err));
-});
+    stream.on('end', () => resolve());
+    stream.on('error', (err) => reject(err));
+  });
 }
-async function handleDownloadAndExtract(downloadUrl: string,destDir: string,filename: string) {
-  
-  const savePath = path.join(app.getPath('userData'), filename);
+async function handleDownloadAndExtract(downloadUrl: string, destDir: string, filename: string) {
+
+  const savePath = path.join(app.getPath("temp"), filename);
   try {
     await downloadFile(downloadUrl, savePath);
     await extract7z(savePath, destDir);
@@ -107,23 +100,36 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
-  
 
-ipcMain.handle('remove-directory', async (event, dirPath) => {
-  try {
-    // emptyDir 会清空内容但保留目录，remove 会连同目录一起删除
-    await fs.remove(dirPath); 
 
-  } catch (err) {
-    console.error('删除目录失败:', err);
-  }
-});
-  ipcMain.handle('open-file', async () => {
+  ipcMain.handle('remove-directory', async (event, dirPath) => {
+    try {
+
+      await fs.remove(path.join(dirPath, '..'));
+
+    } catch (err) {
+      console.error('删除目录失败:', err);
+    }
+  });
+  ipcMain.handle('save-file', async (event, name, extensions) => {
+   const result = await dialog.showSaveDialog({
+      filters: [
+        { name: name, extensions: extensions },
+      ]
+    });
+    if (result.canceled) {
+      return null;
+    } else {
+      return result.filePath;
+    };
+
+  });
+  ipcMain.handle('open-file', async (event, name, extensions) => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [
-      { name: 'Executables', extensions: ['exe'] },
-    ]
+        { name: name, extensions: extensions },
+      ]
     })
     if (canceled) {
       return null
@@ -155,20 +161,82 @@ ipcMain.handle('remove-directory', async (event, dirPath) => {
   ipcMain.handle('get-download-path', () => {
     return getdownloadpath();
   });
-  ipcMain.handle('launch-game', async (event, filePath) => {
-  return new Promise((resolve, reject) => {
-    // 使用引号包裹路径，防止空格导致解析失败
-    exec(`"${filePath}"`, (error) => {
-      if (error) {
-        console.error('启动失败:', error)
-        reject(error.message)
-      } else {
-        resolve(true)
-      }
+  ipcMain.handle('get-aup-config', async (event, archivePath) => {
+    const destDir = path.join(app.getPath('temp'), "temp_aup_import");
+    extract7z(archivePath, destDir).then(() => {
+      JSON_AUP = JSON.parse(fs.readFileSync(`${destDir}/config.json`, 'utf8'));
+      return JSON_AUP;
+
     })
   })
-})
-  createWindow()
+  ipcMain.handle('extract-aup', async (event, archivePath, destDir, targetIDs) => {
+    extract7z(archivePath, destDir).then(() => {
+      // 获取目标文件列表
+      const targetFiles = targetIDs.map(id => `${id}.aup`);
+      // 创建一个包含目标文件列表的数组
+      const targetFileList = targetFiles.map(fileName => `${destDir}/${fileName}`);
+      // 删除目标文件
+      Promise.all(targetFileList.map(filePath => fs.unlink))
+    })
+  })
+  ipcMain.handle('export-game', async (event, gamesToExport, saveDir) => {
+    // 1. 准备路径
+    const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
+    try {
+      await fs.ensureDir(tempDir);
+      await fs.writeJson(path.join(tempDir, 'config.json'), gamesToExport);
+      for (const metadata of gamesToExport) {
+        const gameRoot = path.join(metadata.execution_path, '..');
+        const gameDestDir = path.join(tempDir, metadata.id);
+        await fs.copy(gameRoot, gameDestDir);
+      }
+
+
+      return new Promise((resolve, reject) => {
+        const myStream = Seven.add(saveDir, path.join(tempDir,'*'), {
+          $bin: sevenBin.path7za,
+          recursive: true
+        });
+
+        myStream.on('end', async () => {
+          // 压缩完成后清理临时目录
+          try {
+            await fs.remove(tempDir);
+            resolve(true);
+          } catch (cleanupErr) {
+            console.error("Cleanup failed but export succeeded", cleanupErr);
+            resolve(true); // 即使清理失败也算导出成功
+          }
+        });
+
+        myStream.on('error', async (err: any) => {
+          await fs.remove(tempDir); // 出错也要清理
+          reject(err);
+        });
+      });
+
+    } catch (error) {
+      // 确保清理
+      if (await fs.pathExists(tempDir)) {
+        await fs.remove(tempDir);
+      }
+      throw error;
+    }
+  });
+  ipcMain.handle('launch-game', async (event, filePath) => {
+    return new Promise((resolve, reject) => {
+      // 使用引号包裹路径，防止空格导致解析失败
+      exec(`"${filePath}"`, (error) => {
+        if (error) {
+          console.error('启动失败:', error)
+          reject(error.message)
+        } else {
+          resolve(true)
+        }
+      })
+    })
+  })
+  createWindow();
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
