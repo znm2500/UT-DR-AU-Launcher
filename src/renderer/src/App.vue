@@ -29,7 +29,7 @@ const I18N = {
         settings_bg_image_label: "启动器背景图片", // [新增]
         settings_choose_image: "选择图片",
         settings_image_not_chosen: "(未选择)",
-        settings_image_current: "(当前背景)",
+        settings_image_current: "(当前图片)",
         settings_download_path_label: "游戏下载路径",
         settings_game_path_label: "游戏可执行文件路径",
         settings_browse: "浏览",
@@ -63,7 +63,7 @@ const I18N = {
         settings_import_image_label: "Local Game Image",
         settings_bg_image_label: "Launcher Background Image", // [新增]
         settings_choose_image: "Choose Image",
-        settings_image_current: "(Current Background)",
+        settings_image_current: "(Current Image)",
         settings_image_not_chosen: "(Not chosen)",
         settings_download_path_label: "Game Download Path",
         settings_game_path_label: "Game Executable Path",
@@ -130,7 +130,7 @@ const showSettings = ref(false);
 const settingsForm = reactive({
     name: '',
     image: null as File | null,
-    imageName: computed(() => (I18N[currentLang.value] || I18N.en).settings_image_not_chosen),
+    imageName: '',
     bgImage: null as File | null, // [新增]
     bgImageName: '', // [新增]
     downloadPath: '',
@@ -171,9 +171,12 @@ const fullList = computed(() => {
 const filteredList = computed(() => {
     const query = searchInput.value.toLowerCase();
     if (!query) return fullList.value;
-    return fullList.value.filter(g =>
-    (g.en_name?.toLowerCase().includes(query) ||
-        g.zh_name?.toLowerCase().includes(query))
+    return fullList.value.filter(g => {
+        for (const k of Object.keys(g)) {
+            if (g[k] && g[k].toLowerCase().includes(query)) return true;
+        }
+        return false;
+    }
     );
 });
 
@@ -269,8 +272,7 @@ function importGame() {
     if (name) {
         const newGame = {
             id: `local_${Date.now()}`,
-            zh_name: name,
-            en_name: name,
+            name: { en: name, zh: name },
             type: 'local',
             playable: true,
             img: "https://placehold.co/400x200/white/black?text=LOCAL+GAME",
@@ -294,7 +296,7 @@ function performDelete() {
     playSfx('confirm');
     let execution_path;
     userGames.value = userGames.value.filter((g) => {
-        if(g.id === activeGame.value.id) {
+        if (g.id === activeGame.value.id) {
             execution_path = g.execution_path;
             return false;
         }
@@ -331,30 +333,18 @@ function openSettings() {
     settingsForm.downloadPath = settings.value.downloadPath;
     settingsForm.lang = settings.value.lang;
 
-    // 如果当前有选中的本地游戏，加载它的路径和名称
-    if (activeGame.value && activeGame.value.type === 'local') {
 
-        switch (currentLang.value) {
-            case 'en':
-                settingsForm.name = activeGame.value.en_name;
-                break;
-            case 'zh':
-            default:
-                settingsForm.name = activeGame.value.zh_name;
-                break;
-        }
-        settingsForm.gamePath = activeGame.value.execution_path; // 填入当前执行路径
-    } else {
-        settingsForm.name = '';
-        settingsForm.gamePath = '';
-    }
+    settingsForm.name = activeGame.value.name[currentLang.value]; // 填入当前名称
+    settingsForm.gamePath = activeGame.value.execution_path;
 
     // 背景图逻辑
     settingsForm.bgImage = null; // 重置新选择的文件对象
     settingsForm.bgImageName = settings.value.backgroundImage
         ? lang.value.settings_image_current
         : lang.value.settings_image_not_chosen;
-
+    settingsForm.imageName = settingsForm.image
+        ? lang.value.settings_image_current
+        : lang.value.settings_image_not_chosen;
     showSettings.value = true;
 }
 function saveSettings() {
@@ -362,21 +352,13 @@ function saveSettings() {
 
     // 1. 同步非图片数据
     settings.value.downloadPath = settingsForm.downloadPath;
+    activeGame.value.name[currentLang.value] = settingsForm.name;
     settings.value.lang = settingsForm.lang;
     if (activeGame.value && activeGame.value.type === 'local') {
         if (activeGame.value.execution_path !== settingsForm.gamePath) {
             activeGame.value.playable = true;
             activeGame.value.execution_path = settingsForm.gamePath;
         }
-        switch (settingsForm.lang) {
-            case 'en':
-                activeGame.value.en_name = settingsForm.name;
-                break;
-            case 'zh':
-                activeGame.value.zh_name = settingsForm.name;
-                break;
-        }
-        
         if (settingsForm.image) {
             const reader = new FileReader();
             reader.onload = async (e) => {
@@ -420,6 +402,7 @@ function handleFileSelect(e: Event) {
     const input = e.target as HTMLInputElement;
     if (input.files && input.files[0]) {
         settingsForm.image = input.files[0];
+        settingsForm.imageName = input.files[0].name;
     }
 }
 
@@ -439,7 +422,6 @@ onMounted(async () => {
 
     try {
         GITHUB_GAMES.value = [];
-
         userGames.value = (await window.api.getStoreValue('userGames', [])) as any[];
         const downloadPath = await window.api.getdownloadpath();
         settings.value = (await window.api.getStoreValue('settings', { 'lang': 'en', 'downloadPath': downloadPath, 'backgroundImage': '' })) as any;
@@ -475,7 +457,7 @@ onMounted(async () => {
                 <div class="card-left">
                     <img :src="soulIcon" class="soul-icon" draggable="false" />
                     <div class="info-box">
-                        <div class="name">{{ currentLang === 'en' ? (game.en_name) : (game.zh_name) }}</div>
+                        <div class="name">{{ game.name[currentLang] }}</div>
                         <div :key="force_render_key"
                             :class="['status', game.type === 'local' ? (game.playable ? 'tag-installed' : 'tag-error') : (game.type === 'downloading' ? 'tag-downloading' : 'tag-download')]">
                             {{ game.type === 'local' ? (game.playable ? lang.installed : lang.error) :
@@ -510,8 +492,8 @@ onMounted(async () => {
 
         <div id="confirm-overlay" :class="{ show: showConfirmDelete }">
             <div class="confirm-card">
-                <div class="confirm-body">{{ lang.confirm_del }} <span id="confirm-game-name">{{ currentLang === 'en' ?
-                    activeGame?.en_name : activeGame?.zh_name }}</span>?</div>
+                <div class="confirm-body">{{ lang.confirm_del }} <span id="confirm-game-name">{{
+                    activeGame ? activeGame.name[currentLang] : '' }}</span>?</div>
                 <div class="confirm-actions">
                     <div class="btn enabled" @click="performDelete">{{ lang.confirm_yes }}</div>
                     <div class="btn" @click="cancelDelete">{{ lang.confirm_no }}</div>
@@ -537,10 +519,10 @@ onMounted(async () => {
                     <div style="display:flex;gap:8px;align-items:center;">
                         <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
                             lang.settings_choose_image
-                        }}</label>
+                            }}</label>
                         <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                             settingsForm.bgImageName
-                        }}</div>
+                            }}</div>
                     </div>
                     <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                         accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
@@ -555,13 +537,13 @@ onMounted(async () => {
                         <label>{{ lang.settings_import_name_label }}</label>
                         <input type="text" v-model="settingsForm.name" class="search-input"
                             :placeholder="lang.placeholder_game_name" />
-
                         <label>{{ lang.settings_import_image_label }}</label>
                         <div style="display:flex;gap:8px;align-items:center;">
                             <label class="btn" for="setting-game-image-input" id="setting-choose-game-image">{{
                                 lang.settings_choose_image }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
-                                settingsForm.imageName }}</div>
+                                settingsForm.imageName
+                            }}</div>
                         </div>
                         <input type="file" id="setting-game-image-input" @change="handleFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
