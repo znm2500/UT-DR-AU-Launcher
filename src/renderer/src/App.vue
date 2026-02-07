@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed, watch, toRaw } from 'vue'
 import soulIcon from './assets/spr_soul.png'
+import defaultCover from './assets/default_cover.webp'
+import path from 'path-browserify';
 
 const availableLanguages = [
     { code: 'en', label: 'English' },
@@ -19,6 +21,7 @@ const I18N = {
         download: "[ 前往下载 ]",
         installed: "已就绪",
         error: "错误",
+        export_select_all: "[ 全选 / 取消全选 ]",
         to_download: "未下载",
         downloading: "下载中",
         settings: "[ 设置 ]",
@@ -52,7 +55,13 @@ const I18N = {
         exporting: "正在导出...",
         export_success: "所有导出任务已完成!",
         success: "成功",
-        select_export_dir: "请选择导出文件的保存目录"
+        import_title: "导入游戏",
+        import_method_exe: "> 导入本地执行程序 (.exe)",
+        import_method_aup: "> 导入同人包 (.aup)",
+        import_aup_select_label: "请选择要从包中导入的游戏:",
+        import_aup_confirm: "开始导入",
+        select_export_dir: "请选择导出文件的保存目录",
+        import_success: "导入成功!"
     },
     en: {
         ok: "OK",
@@ -64,6 +73,7 @@ const I18N = {
         download: "[ DOWNLOAD ]",
         installed: "INSTALLED",
         error: "ERROR",
+        export_select_all: "[ SELECT / DESELECT ALL ]",
         to_download: "DOWNLOADABLE",
         downloading: "DOWNLOADING",
         settings: "[ SETTINGS ]",
@@ -97,7 +107,13 @@ const I18N = {
         exporting: "Exporting...",
         export_success: "All exports finished!",
         success: "Success",
-        select_export_dir: "Select directory to save files"
+        import_title: "IMPORT GAME",
+        import_method_exe: "> IMPORT LOCAL EXE (.exe)",
+        import_method_aup: "> IMPORT PACKAGE (.aup)",
+        import_aup_select_label: "Select games to import from package:",
+        import_aup_confirm: "IMPORT SELECTED",
+        select_export_dir: "Select directory to save files",
+        import_success: "Import successful!"
     }
 };
 
@@ -139,13 +155,18 @@ const settings = ref({
     lang: 'en',
     gamePath: ''
 });
-
+const showExeImportModal = ref(false);
+const exeImportForm = reactive({
+    name: '',
+    path: '',
+    image: null as File | null,
+    imageName: ''
+});
 const currentLang = computed(() => settings.value.lang);
 const selectedIndex = ref(0);
 const visibleCount = ref(5);
 const downloadIdSet = new Set();
 const showConfirmDelete = ref(false);
-
 const showSettings = ref(false);
 const settingsForm = reactive({
     name: '',
@@ -163,7 +184,11 @@ const showExportModal = ref(false);
 const selectedExportIds = ref<Set<string>>(new Set());
 const isExporting = ref(false);
 const errorTitle = ref('');
-
+const showImportTypeModal = ref(false);    // 导入方式选择显示
+const showAupImportModal = ref(false);     // AUP 内部列表显示
+const aupPendingGames = ref<any[]>([]);    // 解析出来的游戏
+const selectedAupIds = ref<Set<string>>(new Set()); // AUP 选中项
+const tmpAupDir = ref('');
 // --- Computed Properties ---
 const lang = computed(() => I18N[currentLang.value] || I18N.en);
 function forceRender() {
@@ -213,7 +238,9 @@ const activeGame = computed(() => filteredList.value[selectedIndex.value] || nul
 const localUserGames = computed(() => {
     return userGames.value.filter(g => g.type === 'local');
 });
-
+const isAllSelected = computed(() => {
+    return localUserGames.value.length > 0 && selectedExportIds.value.size === localUserGames.value.length;
+});
 // --- Methods ---
 
 function selectGame(index: number) {
@@ -234,7 +261,7 @@ function browseDownloadPath() {
     })();
 }
 
-function triggerDialog(msg: string, title: string,sfx: string = 'error') {
+function triggerDialog(msg: string, title: string, sfx: string = 'error') {
     playSfx(sfx);
     errorTitle.value = title;
     errorMessage.value = msg;
@@ -292,22 +319,164 @@ function handleAction() {
     })();
 }
 
+// 点击底部 [ 导入 ] 按钮
 function importGame() {
     playSfx('confirm');
-    const name = prompt(lang.value.prompt_import_name, lang.value.placeholder_game_name);
-    if (name) {
-        const newGame = {
-            id: `local_${Date.now()}`,
-            name: { en: name, zh: name },
-            type: 'local',
-            playable: true,
-            img: "https://placehold.co/400x200/white/black?text=LOCAL+GAME",
-            execution_path: ''
-        };
+    showImportTypeModal.value = true;
+}
+
+// 方式 1: 传统 EXE 导入 (保留你原本的功能)
+function importExeDirectly() {
+    showImportTypeModal.value = false; // 关闭选择类型的弹窗
+
+    // 重置表单
+    exeImportForm.name = '';
+    exeImportForm.path = '';
+    exeImportForm.image = null;
+    exeImportForm.imageName = lang.value.settings_image_not_chosen;
+
+    playSfx('confirm');
+    showExeImportModal.value = true; // 打开新的详细导入弹窗
+}
+
+// 新增：浏览 EXE 路径
+function browseExeImportPath() {
+    playSfx('confirm');
+    (async () => {
+        const result = await window.api.openFile(lang.value.name_exe, ['exe']);
+        if (result) {
+            exeImportForm.path = result;
+        }
+
+    })();
+}
+
+// 新增：处理封面图片选择
+function handleExeImportImageSelect(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+        exeImportForm.image = input.files[0];
+        exeImportForm.imageName = input.files[0].name;
+    }
+}
+
+// 新增：确认导入逻辑
+function confirmExeImport() {
+    // 只有名称填写了才能继续
+    if (!exeImportForm.name || !exeImportForm.path) return;
+
+    playSfx('save');
+
+    const newGame = {
+        id: crypto.randomUUID(),
+        name: { en: exeImportForm.name, zh: exeImportForm.name },
+        type: 'local',
+        playable: true,
+        execution_path: exeImportForm.path, // 使用填写的路径
+        img: defaultCover
+    };
+
+    const finalize = async () => {
         userGames.value.push(newGame);
-        (async () => {
-            await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
-        })();
+        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+
+        showExeImportModal.value = false; // 关闭弹窗
+
+        // 自动定位到新游戏
+        selectedIndex.value = filteredList.value.findIndex(g => g.id === newGame.id);
+        triggerDialog(lang.value.success, lang.value.success, 'save');
+    };
+
+    // 如果用户选了图，先读取图片 base64
+    if (exeImportForm.image) {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            if (e.target?.result) {
+                newGame.img = e.target.result as string;
+            }
+            await finalize();
+        };
+        reader.readAsDataURL(exeImportForm.image);
+    } else {
+        finalize();
+    }
+}
+
+// 新增：取消导入
+function cancelExeImport() {
+    playSfx('cancel');
+    showExeImportModal.value = false;
+}
+// 方式 2: AUP 包导入逻辑
+async function importFromAup() {
+    showImportTypeModal.value = false;
+    try {
+        const filePath = await window.api.openFile(lang.value.name_aup, ['aup']);
+        if (!filePath) return;
+
+        playSfx('confirm');
+        // 调用后端 API 解压并解析 7z 中的 json
+        const aupdata = await window.api.parseAup(filePath);
+        const games = aupdata.games;
+        tmpAupDir.value = aupdata.tempDir;
+        if (games && games.length > 0) {
+            aupPendingGames.value = games;
+            selectedAupIds.value.clear();
+            showAupImportModal.value = true;
+        }
+    } catch (err: any) {
+        triggerDialog(`${err}`, lang.value.error);
+    }
+}
+
+// AUP 全选/反选 (逻辑与你的导出全选一致)
+const isAllAupSelected = computed(() => {
+    return aupPendingGames.value.length > 0 && selectedAupIds.value.size === aupPendingGames.value.length;
+});
+
+function toggleSelectAllAup() {
+    playSfx('switch');
+    if (isAllAupSelected.value) {
+        selectedAupIds.value.clear();
+    } else {
+        aupPendingGames.value.forEach(g => selectedAupIds.value.add(g.id));
+    }
+}
+
+// 执行 AUP 导入
+async function performAupImport() {
+    if (selectedAupIds.value.size === 0) return;
+
+    try {
+        const gamesToAdd = aupPendingGames.value.filter(g => selectedAupIds.value.has(g.id));
+
+        // 1. 构造 Promise 数组，实现真正的并行移动
+        const moveTasks = gamesToAdd.map(async (g) => {
+            const destDir = path.join(settings.value.downloadPath, g.id);
+            const newExecPath = path.join(destDir, path.basename(g.execution_path));
+
+            // 更新本地状态
+            const newG = { ...g, execution_path: newExecPath };
+            userGames.value.push(newG);
+
+            // 执行移动并返回 Promise
+            // 假设 moveFolder 返回的是 Promise
+            return window.api.moveFolder(path.join(tmpAupDir.value, g.id), destDir);
+        });
+
+        // 2. 等待所有“搬家”任务完成
+        await Promise.all(moveTasks);
+
+        // 3. 此时再清理临时目录和保存配置（绝对安全）
+        await window.api.deleteFolder(tmpAupDir.value);
+        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+
+        triggerDialog(lang.value.import_success, lang.value.success, 'save');
+    } catch (err: any) {
+        console.error("导入失败:", err);
+        triggerDialog(`${err}`, lang.value.error);
+    } finally {
+        showAupImportModal.value = false;
     }
 }
 
@@ -334,6 +503,16 @@ function cancelExport() {
     showExportModal.value = false;
 }
 
+function toggleSelectAll() {
+    playSfx('switch');
+    if (isAllSelected.value) {
+        selectedExportIds.value.clear();
+    } else {
+        localUserGames.value.forEach(g => {
+            selectedExportIds.value.add(g.id);
+        });
+    }
+}
 function performExport() {
     if (selectedExportIds.value.size === 0) return;
 
@@ -347,8 +526,7 @@ function performExport() {
             isExporting.value = true;
             const gamesToExport = localUserGames.value.filter(g => selectedExportIds.value.has(g.id));
             await window.api.exportGame(JSON.parse(JSON.stringify(gamesToExport)), saveDir);
-            
-            triggerDialog(lang.value.export_success, lang.value.success,'save');
+            triggerDialog(lang.value.export_success, lang.value.success, 'save');
         } catch (err: any) {
             triggerDialog(`${err}`, lang.value.error);
         } finally {
@@ -491,7 +669,9 @@ onMounted(async () => {
 
     (async () => {
         try {
-            const res = await fetch('https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/game_index.json');
+            const res = await fetch('https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/game_index.json', {
+                cache: 'no-store' // 告诉浏览器完全忽略缓存，直接向服务器发请求
+            });
             if (res.ok) {
                 GITHUB_GAMES.value = await res.json();
             }
@@ -551,124 +731,227 @@ onMounted(async () => {
             </div>
         </div>
 
-        <div id="confirm-overlay" :class="{ show: showConfirmDelete }">
-            <div class="confirm-card">
-                <div class="confirm-body">{{ lang.confirm_del }} <span id="confirm-game-name">{{
-                    activeGame ? activeGame.name[currentLang] : '' }}</span>?</div>
-                <div class="confirm-actions">
-                    <div class="btn enabled" @click="performDelete">{{ lang.confirm_yes }}</div>
-                    <div class="btn" @click="cancelDelete">{{ lang.confirm_no }}</div>
-                </div>
-            </div>
-        </div>
-
-        <div id="export-overlay" :class="{ show: showExportModal }">
-            <div class="settings-card">
-                <div class="settings-title">{{ lang.export_title }}</div>
-                <div class="settings-body" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
-                    <label style="margin-bottom: 10px;">{{ lang.export_select_label }}</label>
-
-                    <div class="export-list-container">
-                        <div v-for="g in localUserGames" :key="g.id"
-                            :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
-                            @click="toggleExportSelection(g.id)">
-                            <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]' }}</span>
-                            {{ g.name[currentLang] }}
-                        </div>
+        <Transition name="fade">
+            <div v-if="showImportTypeModal" id="import-type-overlay">
+                <div class="confirm-card" style="width: 480px;">
+                    <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title }} ]
                     </div>
-                </div>
-                <div class="settings-actions">
-                    <div :class="['btn', { enabled: !isExporting && selectedExportIds.size > 0, disabled: isExporting || selectedExportIds.size === 0 }]"
-                        @click="performExport">
-                        {{ lang.export_confirm }}
-                    </div>
-                    <div :class="['btn', { enabled: !isExporting, disabled: isExporting }]" @click="cancelExport">
-                        {{ lang.settings_cancel }}
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div id="settings-overlay" :class="{ show: showSettings }">
-            <div class="settings-card">
-                <div class="settings-title">{{ lang.settings_title }}</div>
-                <div class="settings-body scrollable-settings">
-
-                    <label>{{ lang.settings_lang_label }}</label>
-
-                    <select v-model="settingsForm.lang" class="retro-select">
-                        <option v-for="opt in availableLanguages" :key="opt.code" :value="opt.code">
-                            {{ opt.label }}
-                        </option>
-                    </select>
-
-
-                    <label>{{ lang.settings_bg_image_label }}</label>
-                    <div style="display:flex;gap:8px;align-items:center;">
-                        <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
-                            lang.settings_choose_image
-                        }}</label>
-                        <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
-                            settingsForm.bgImageName
+                    <div class="confirm-actions"
+                        style="flex-direction: column; align-items: flex-start; gap: 20px; padding: 0 20px;">
+                        <div class="btn enabled" style="font-size: 1.5rem;" @click="importExeDirectly">{{
+                            lang.import_method_exe }}</div>
+                        <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{ lang.import_method_aup
                         }}</div>
+                        <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
+                        <div class="btn" style="align-self: center;"
+                            @click="showImportTypeModal = false; playSfx('cancel');">{{
+                                lang.settings_cancel }}</div>
                     </div>
-                    <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
-                        accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
+                </div>
+            </div>
+        </Transition>
 
-                    <label>{{ lang.settings_download_path_label }}</label>
-                    <div style="display:flex;gap:8px;align-items:center;">
-                        <input type="text" v-model="settingsForm.downloadPath" class="search-input"
-                            :placeholder="lang.placeholder_download_path" style="flex:1" />
-                        <div class="btn browse-btn" @click="browseDownloadPath">{{ lang.settings_browse }}</div>
-                    </div>
-                    <template v-if="activeGame?.type === 'local'">
-                        <label>{{ lang.settings_import_name_label }}</label>
-                        <input type="text" v-model="settingsForm.name" class="search-input"
+        <Transition name="fade">
+            <div v-if="showExeImportModal" id="exe-import-overlay">
+                <div class="settings-card">
+                    <div class="settings-title">{{ lang.import_method_exe }}</div>
+                    <div class="settings-body scrollable-settings">
+                        <label>{{ lang.settings_import_name_label }} <span style="color:red">*</span></label>
+                        <input type="text" v-model="exeImportForm.name" class="search-input"
                             :placeholder="lang.placeholder_game_name" />
-                        <label>{{ lang.settings_import_image_label }}</label>
-                        <div style="display:flex;gap:8px;align-items:center;">
-                            <label class="btn" for="setting-game-image-input" id="setting-choose-game-image">{{
-                                lang.settings_choose_image }}</label>
-                            <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
-                                settingsForm.imageName
-                                }}</div>
-                        </div>
-                        <input type="file" id="setting-game-image-input" @change="handleFileSelect"
-                            accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
+
                         <label>{{ lang.settings_game_path_label }}</label>
                         <div style="display:flex;gap:8px;align-items:center;">
-                            <input type="text" v-model="settingsForm.gamePath" class="search-input"
-                                :placeholder="lang.placeholder_download_path" style="flex:1" />
-                            <div class="btn browse-btn" @click="browseGamePath">{{ lang.settings_browse }}</div>
+                            <input type="text" v-model="exeImportForm.path" class="search-input"
+                                placeholder="/Path/To/Game.exe" style="flex:1" />
+                            <div class="btn browse-btn" @click="browseExeImportPath">{{ lang.settings_browse }}</div>
                         </div>
-                    </template>
-                </div>
-                <div class="settings-actions">
-                    <div class="btn enabled" @click="saveSettings">{{ lang.settings_save }}</div>
-                    <div class="btn" @click="cancelSettings" id="settings-cancel">{{ lang.settings_cancel }}</div>
-                </div>
-            </div>
-        </div>
 
-        <div id="error-overlay" :class="{ show: showErrorModal }">
-            <div class="error-card">
-                <div class="error-header">
-                    <span class="error-title">{{ errorTitle }}</span>
-                </div>
-                <div class="error-body">
-                    {{ errorMessage }}
-                </div>
-                <div class="error-actions">
-                    <div class="btn main enabled" @click="closeError">{{ lang.ok }}</div>
+                        <label>{{ lang.settings_import_image_label }}</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <label class="btn" for="import-exe-image-input" style="cursor: pointer;">
+                                {{ lang.settings_choose_image }}
+                            </label>
+                            <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">
+                                {{ exeImportForm.imageName }}
+                            </div>
+                        </div>
+                        <input type="file" id="import-exe-image-input" @change="handleExeImportImageSelect"
+                            accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
+                    </div>
+                    <div class="settings-actions">
+                        <div :class="['btn', { enabled: exeImportForm.name, disabled: !exeImportForm.name || !exeImportForm.path }]"
+                            @click="confirmExeImport">
+                            {{ lang.ok }}
+                        </div>
+                        <div class="btn enabled" @click="cancelExeImport">
+                            {{ lang.settings_cancel }}
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
+        </Transition>
+
+        <Transition name="fade">
+            <div v-if="showAupImportModal" id="aup-import-overlay">
+                <div class="settings-card">
+                    <div class="settings-title">{{ lang.name_aup }}</div>
+                    <div class="settings-body" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <label>{{ lang.import_aup_select_label }}</label>
+                            <div class="btn" style="font-size: 0.9rem;" @click="toggleSelectAllAup">
+                                {{ lang.export_select_all }}
+                            </div>
+                        </div>
+                        <div class="export-list-container">
+                            <div v-for="g in aupPendingGames" :key="g.id"
+                                :class="['export-item', { selected: selectedAupIds.has(g.id) }]"
+                                @click="playSfx('switch'); selectedAupIds.has(g.id) ? selectedAupIds.delete(g.id) : selectedAupIds.add(g.id)">
+                                <span style="margin-right: 10px;">{{ selectedAupIds.has(g.id) ? '[x]' : '[ ]' }}</span>
+                                {{ g.name[currentLang] }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-actions">
+                        <div :class="['btn', { enabled: selectedAupIds.size > 0, disabled: selectedAupIds.size === 0 }]"
+                            @click="performAupImport">
+                            {{ lang.import_aup_confirm }}
+                        </div>
+                        <div class="btn enabled" @click="showAupImportModal = false">
+                            {{ lang.settings_cancel }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
+
+        <Transition name="fade">
+            <div v-if="showConfirmDelete" id="confirm-overlay">
+                <div class="confirm-card">
+                    <div class="confirm-body">{{ lang.confirm_del }} <span id="confirm-game-name">{{
+                        activeGame ? activeGame.name[currentLang] : '' }}</span>?</div>
+                    <div class="confirm-actions">
+                        <div class="btn enabled" @click="performDelete">{{ lang.confirm_yes }}</div>
+                        <div class="btn" @click="cancelDelete">{{ lang.confirm_no }}</div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
+
+        <Transition name="fade">
+            <div v-if="showExportModal" id="export-overlay">
+                <div class="settings-card">
+                    <div class="settings-title">{{ lang.export_title }}</div>
+                    <div class="settings-body" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <label>{{ lang.export_select_label }}</label>
+                            <div class="btn" style="font-size: 0.9rem;" @click="toggleSelectAll">
+                                {{ lang.export_select_all }}
+                            </div>
+                        </div>
+                        <div class="export-list-container">
+                            <div v-for="g in localUserGames" :key="g.id"
+                                :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
+                                @click="toggleExportSelection(g.id)">
+                                <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]' }}</span>
+                                {{ g.name[currentLang] }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-actions">
+                        <div :class="['btn', { enabled: selectedExportIds.size > 0 && !isExporting, disabled: selectedExportIds.size === 0 || isExporting }]"
+                            @click="performExport">
+                            {{ isExporting ? lang.exporting : lang.export_confirm }}
+                        </div>
+                        <div class="btn enabled" @click="cancelExport">
+                            {{ lang.settings_cancel }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
+
+        <Transition name="fade">
+            <div v-if="showSettings" id="settings-overlay">
+                <div class="settings-card">
+                    <div class="settings-title">{{ lang.settings_title }}</div>
+                    <div class="settings-body scrollable-settings">
+                        <label>{{ lang.settings_lang_label }}</label>
+                        <select v-model="settingsForm.lang" class="retro-select">
+                            <option v-for="opt in availableLanguages" :key="opt.code" :value="opt.code">
+                                {{ opt.label }}
+                            </option>
+                        </select>
+
+                        <label>{{ lang.settings_bg_image_label }}</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
+                                lang.settings_choose_image
+                                }}</label>
+                            <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
+                                settingsForm.bgImageName
+                                }}</div>
+                        </div>
+                        <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
+                            accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
+
+                        <label>{{ lang.settings_download_path_label }}</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="text" v-model="settingsForm.downloadPath" class="search-input"
+                                :placeholder="lang.placeholder_download_path" style="flex:1" />
+                            <div class="btn browse-btn" @click="browseDownloadPath">{{ lang.settings_browse }}</div>
+                        </div>
+                        <template v-if="activeGame?.type === 'local'">
+                            <label>{{ lang.settings_import_name_label }}</label>
+                            <input type="text" v-model="settingsForm.name" class="search-input"
+                                :placeholder="lang.placeholder_game_name" />
+                            <label>{{ lang.settings_import_image_label }}</label>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <label class="btn" for="setting-game-image-input" id="setting-choose-game-image">{{
+                                    lang.settings_choose_image }}</label>
+                                <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
+                                    settingsForm.imageName
+                                }}</div>
+                            </div>
+                            <input type="file" id="setting-game-image-input" @change="handleFileSelect"
+                                accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
+                            <label>{{ lang.settings_game_path_label }}</label>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <input type="text" v-model="settingsForm.gamePath" class="search-input"
+                                    :placeholder="lang.placeholder_download_path" style="flex:1" />
+                                <div class="btn browse-btn" @click="browseGamePath">{{ lang.settings_browse }}</div>
+                            </div>
+                        </template>
+                    </div>
+                    <div class="settings-actions">
+                        <div class="btn enabled" @click="saveSettings">{{ lang.settings_save }}</div>
+                        <div class="btn" @click="cancelSettings" id="settings-cancel">{{ lang.settings_cancel }}</div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
+
+        <Transition name="fade">
+            <div v-if="showErrorModal" id="error-overlay">
+                <div class="error-card">
+                    <div class="error-header">
+                        <span class="error-title">{{ errorTitle }}</span>
+                    </div>
+                    <div class="error-body">
+                        {{ errorMessage }}
+                    </div>
+                    <div class="error-actions">
+                        <div class="btn main enabled" @click="closeError">{{ lang.ok }}</div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
     </div>
 </template>
 
 <style>
-/* ... (之前的样式保持不变) ... */
-
 @font-face {
     font-family: 'fzxs';
     src: url('./assets/fzxs.ttf') format('truetype');
@@ -702,6 +985,17 @@ onMounted(async () => {
     transition: background-image 0.5s ease-in-out;
 }
 
+/* --- Vue 过渡动画 --- */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.24s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
 /* --- 顶部栏 --- */
 .top-bar {
     max-width: 1200px;
@@ -722,18 +1016,6 @@ onMounted(async () => {
     padding: 5px 10px;
     outline: none;
     text-align: center;
-}
-
-.lang-btn {
-    cursor: pointer;
-    border: 5px solid white;
-    padding: 2px 10px;
-    font-size: 1.2rem;
-}
-
-.lang-btn:hover {
-    background: white;
-    color: black;
 }
 
 /* --- 列表区域 --- */
@@ -887,10 +1169,6 @@ onMounted(async () => {
     cursor: default;
 }
 
-.btn.disabled:hover {
-    color: var(--dim-text);
-}
-
 .btn.enabled {
     color: white;
     pointer-events: auto;
@@ -939,11 +1217,14 @@ onMounted(async () => {
     padding: 10px;
 }
 
-/* 模态框通用样式 */
+/* 模态框通用样式 - 移除了 .show，改用 Vue Transition 控制 */
 #confirm-overlay,
 #settings-overlay,
 #error-overlay,
-#export-overlay {
+#export-overlay,
+#import-type-overlay,
+#aup-import-overlay,
+#exe-import-overlay {
     position: fixed;
     inset: 0;
     display: flex;
@@ -951,17 +1232,6 @@ onMounted(async () => {
     justify-content: center;
     background: rgba(0, 0, 0, 0.8);
     z-index: 9999;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 240ms ease;
-}
-
-#confirm-overlay.show,
-#settings-overlay.show,
-#error-overlay.show,
-#export-overlay.show {
-    opacity: 1;
-    pointer-events: auto;
 }
 
 .confirm-card,
@@ -990,7 +1260,7 @@ onMounted(async () => {
     padding-right: 10px;
 }
 
-/* 全局滚动条样式定义，包含 export-list */
+/* 全局滚动条样式定义 */
 #game-list::-webkit-scrollbar,
 .scrollable-settings::-webkit-scrollbar,
 .export-list-container::-webkit-scrollbar {
@@ -1050,15 +1320,9 @@ onMounted(async () => {
     padding: 10px 25px;
 }
 
-input[type="radio"] {
-    margin-right: 5px;
-}
-
-/* 修改：导出列表固定高度并允许滚动 */
 .export-list-container {
     border: 2px solid #333;
     padding: 5px;
-    /* 关键属性：固定高度 + 垂直滚动 */
     height: 300px;
     overflow-y: auto;
     background: black;
@@ -1073,7 +1337,6 @@ input[type="radio"] {
     color: #aaa;
     display: flex;
     align-items: center;
-    /* 防止单行文字过长溢出 */
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

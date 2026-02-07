@@ -1,5 +1,6 @@
-appId: com.electron.app
-productName: undertaleau-launcher
+appId: com.au.launcher
+productName: AU Launcher
+copyright: Copyright © 2026 znm
 directories:
   buildResources: build
 files:
@@ -11,6 +12,7 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+  - "**/node_modules/7zip-bin/**/*"  # 强制解压 7zip 的二进制文件
 win:
   executableName: undertaleau-launcher
 nsis:

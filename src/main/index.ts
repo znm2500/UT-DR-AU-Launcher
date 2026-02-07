@@ -9,7 +9,13 @@ import path from 'path';
 import Seven from 'node-7z';
 import sevenBin from '7zip-bin';
 import Store from 'electron-store';
-let JSON_AUP;
+import fastFolderSize from 'fast-folder-size';
+import { promisify } from 'util'
+let _7zPath = sevenBin.path7za;
+if (process.env.NODE_ENV !== 'development') {
+    _7zPath = _7zPath.replace('app.asar', 'app.asar.unpacked');
+}
+const getSize = promisify(fastFolderSize);
 const store = new Store({
 
   clearInvalidConfig: true,
@@ -33,7 +39,7 @@ async function downloadFile(url: string, destPath: string): Promise<void> {
 }
 async function extract7z(archivePath, outputDir) {
   const stream = Seven.extractFull(archivePath, outputDir, {
-    $bin: sevenBin.path7za
+    $bin: _7zPath
 
   });
   return new Promise<void>((resolve, reject) => {
@@ -86,7 +92,7 @@ function createWindow(): void {
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
+// Some APIs can only be used after this _ occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
@@ -102,17 +108,11 @@ app.whenReady().then(() => {
   ipcMain.on('ping', () => console.log('pong'))
 
 
-  ipcMain.handle('remove-directory', async (event, dirPath) => {
-    try {
-
-      await fs.remove(path.join(dirPath, '..'));
-
-    } catch (err) {
-      console.error('删除目录失败:', err);
-    }
+  ipcMain.handle('remove-directory', async (_, dirPath) => {
+    fs.remove(path.join(dirPath, '..'));
   });
-  ipcMain.handle('save-file', async (event, name, extensions) => {
-   const result = await dialog.showSaveDialog({
+  ipcMain.handle('save-file', async (_, name, extensions) => {
+    const result = await dialog.showSaveDialog({
       filters: [
         { name: name, extensions: extensions },
       ]
@@ -124,7 +124,7 @@ app.whenReady().then(() => {
     };
 
   });
-  ipcMain.handle('open-file', async (event, name, extensions) => {
+  ipcMain.handle('open-file', async (_, name, extensions) => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [
@@ -147,83 +147,102 @@ app.whenReady().then(() => {
       return filePaths[0]
     }
   });
-  ipcMain.handle('download-and-extract', async (event, downloadUrl, destDir, filename) => {
+  ipcMain.handle('download-and-extract', async (_, downloadUrl, destDir, filename) => {
     await handleDownloadAndExtract(downloadUrl, destDir, filename);
   });
-  ipcMain.handle('get-store-value', (event, key, value) => {
+  ipcMain.handle('get-store-value', (_, key, value) => {
     console.log(store.get(key, value));
     return store.get(key, value);
   })
-
-  ipcMain.handle('set-store-value', (event, key, value) => {
+  ipcMain.handle('set-store-value', (_, key, value) => {
     store.set(key, value);
   })
   ipcMain.handle('get-download-path', () => {
     return getdownloadpath();
   });
-  ipcMain.handle('get-aup-config', async (event, archivePath) => {
-    const destDir = path.join(app.getPath('temp'), "temp_aup_import");
-    extract7z(archivePath, destDir).then(() => {
-      JSON_AUP = JSON.parse(fs.readFileSync(`${destDir}/config.json`, 'utf8'));
-      return JSON_AUP;
+ ipcMain.handle('get-aup-config', async (_, archivePath) => {
+  // 生成临时目录
+  const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  
+  try {
+    // 1. 必须 await 这个异步解压过程
+    await extract7z(archivePath, tempDir);
+    
+    // 2. 解压完成后读取文件
+    const configPath = path.join(tempDir, 'config.json');
+    const jsonRaw = fs.readFileSync(configPath, 'utf8');
+    const games = JSON.parse(jsonRaw);
+    
+    // 3. 显式返回结果给渲染进程
+    return { games, tempDir }; 
+  } catch (error) {
+    console.error('解析 AUP 失败:', error);
+    throw error; // 抛出错误，渲染进程的 try-catch 就能捕获到
+  }
+});
+  ipcMain.handle('move-folder', async (_, archivePath, destDir) => {
+    fs.move(archivePath, destDir);
+  })
+  ipcMain.handle('export-game', async (_, gamesToExport, saveDir) => {
+  const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
+  
+  try {
+    await fs.ensureDir(tempDir);
+    await fs.writeJson(path.join(tempDir, 'config.json'), gamesToExport);
 
-    })
-  })
-  ipcMain.handle('extract-aup', async (event, archivePath, destDir, targetIDs) => {
-    extract7z(archivePath, destDir).then(() => {
-      // 获取目标文件列表
-      const targetFiles = targetIDs.map(id => `${id}.aup`);
-      // 创建一个包含目标文件列表的数组
-      const targetFileList = targetFiles.map(fileName => `${destDir}/${fileName}`);
-      // 删除目标文件
-      Promise.all(targetFileList.map(filePath => fs.unlink))
-    })
-  })
-  ipcMain.handle('export-game', async (event, gamesToExport, saveDir) => {
-    // 1. 准备路径
-    const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
-    try {
-      await fs.ensureDir(tempDir);
-      await fs.writeJson(path.join(tempDir, 'config.json'), gamesToExport);
-      for (const metadata of gamesToExport) {
-        const gameRoot = path.join(metadata.execution_path, '..');
-        const gameDestDir = path.join(tempDir, metadata.id);
-        await fs.copy(gameRoot, gameDestDir);
+    // 1. 构造任务数组 (不使用 await，先创建 Promise)
+    const copyPromises = gamesToExport.map(async (metadata) => {
+      const gameRoot = path.join(metadata.execution_path, '..');
+      const gameDestDir = path.join(tempDir, metadata.id);
+      
+      // 确保目标子目录存在
+      await fs.ensureDir(gameDestDir);
+
+      const fileSize: any = await getSize(gameRoot);
+
+      if (fileSize < 2147483648) { // 2GB
+        // 使用异步版本 fs.copy 而不是 copySync
+        return fs.copy(gameRoot, gameDestDir);
+      } else {
+        const destExePath = path.join(gameDestDir, path.basename(metadata.execution_path));
+        return fs.copyFile(metadata.execution_path, destExePath);
       }
+    });
 
+    // 2. 并行执行所有复制任务，并等待它们全部完成
+    // Promise.all 会在所有任务成功时 resolve，只要有一个失败就会 reject
+    await Promise.all(copyPromises);
 
-      return new Promise((resolve, reject) => {
-        const myStream = Seven.add(saveDir, path.join(tempDir,'*'), {
-          $bin: sevenBin.path7za,
-          recursive: true
-        });
-
-        myStream.on('end', async () => {
-          // 压缩完成后清理临时目录
-          try {
-            await fs.remove(tempDir);
-            resolve(true);
-          } catch (cleanupErr) {
-            console.error("Cleanup failed but export succeeded", cleanupErr);
-            resolve(true); // 即使清理失败也算导出成功
-          }
-        });
-
-        myStream.on('error', async (err: any) => {
-          await fs.remove(tempDir); // 出错也要清理
-          reject(err);
-        });
+    // 3. 执行压缩任务
+    return new Promise((resolve, reject) => {
+      const myStream = Seven.add(saveDir, path.join(tempDir, '*'), {
+        $bin: _7zPath,
+        recursive: true
       });
 
-    } catch (error) {
-      // 确保清理
-      if (await fs.pathExists(tempDir)) {
+      myStream.on('end', async () => {
+        try {
+          await fs.remove(tempDir);
+          resolve(true);
+        } catch (cleanupErr) {
+          resolve(true); 
+        }
+      });
+
+      myStream.on('error', async (err) => {
         await fs.remove(tempDir);
-      }
-      throw error;
+        reject(err);
+      });
+    });
+
+  } catch (error) {
+    if (await fs.pathExists(tempDir)) {
+      await fs.remove(tempDir);
     }
-  });
-  ipcMain.handle('launch-game', async (event, filePath) => {
+    throw error;
+  }
+});
+  ipcMain.handle('launch-game', async (_, filePath) => {
     return new Promise((resolve, reject) => {
       // 使用引号包裹路径，防止空格导致解析失败
       exec(`"${filePath}"`, (error) => {

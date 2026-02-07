@@ -12,7 +12,8 @@ declare global {
       getStoreValue: (key: string, value?: any) => Promise<any>,
       setStoreValue: (key: string, value: any) => Promise<void>,
       deleteFolder: (path: string) => Promise<void>,
-      getAUPData : (path:string) => Promise<any>,
+      parseAup : (path:string) => Promise<any>,
+      moveFolder: (archivePath: string, destDir: string) => Promise<void>,
       saveFile: (name: string, extensions: string[]) => Promise<string>,
       exportGame: (gamesToExport: any[], saveDir: string) => Promise<any>,
     }

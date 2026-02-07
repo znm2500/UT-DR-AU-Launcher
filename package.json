@@ -1,10 +1,10 @@
 {
-  "name": "undertaleau-launcher",
+  "name": "au-launcher",
   "version": "1.0.0",
-  "description": "An Electron application with Vue and TypeScript",
+  "description": "a UNDERTALE/Deltarune Alternate Universe (AUs) games launcher built with Vue.js and Electron",
   "main": "./out/main/index.js",
-  "author": "example.com",
-  "homepage": "https://electron-vite.org",
+  "author": "znm <znm2500@163.com>",
+  "homepage": "https://github.com/znm2500/UT-DR-AU-Launcher",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
@@ -23,12 +23,14 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "7zip-bin": "^5.2.0",
     "adm-zip": "^0.5.16",
     "axios": "^1.13.4",
     "electron-store": "^8.1.0",
+    "fast-folder-size": "^2.4.0",
     "fs-extra": "^11.3.3",
-    "JSONStream": "^1.3.5",
-    "node-7z": "^3.0.0"
+    "node-7z": "^3.0.0",
+    "path-browserify": "^1.0.1"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "3.0.0",
@@ -49,6 +51,7 @@
     "vue-tsc": "^3.1.6"
   },
   "build": {
+    "asar": true,
     "asarUnpack": [
       "**/node_modules/7zip-bin/**/*"
     ]
