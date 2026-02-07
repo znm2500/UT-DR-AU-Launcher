@@ -17,6 +17,13 @@ let _7zPath = sevenBin.path7za;
 if (process.env.NODE_ENV !== 'development') {
   _7zPath = _7zPath.replace('app.asar', 'app.asar.unpacked');
 }
+if (process.platform === 'linux' && fs.existsSync(_7zPath)) {
+    try {
+        fs.chmodSync(_7zPath, 0o755); // 赋予可执行权限
+    } catch (err) {
+        console.error('无法自动修正 7zip 权限:', err);
+    }
+}
 const getSize = promisify(fastFolderSize);
 const store = new Store({
 
@@ -292,24 +299,10 @@ app.whenReady().then(() => {
     return new Promise((resolve, reject) => {
       // 使用引号包裹路径，防止空格导致解析失败
       if (process.platform === 'win32') {
-        exec(`"${filePath}"`, (error) => {
-          if (error) {
-            console.error('启动失败:', error)
-            reject(error.message)
-          } else {
-            resolve(true)
-          }
-        })
+        exec(`"${filePath}"`)
       }
       else {
-        exec(`"wine ${filePath}"`, (error) => {
-          if (error) {
-            console.error('启动失败:', error)
-            reject(error.message)
-          } else {
-            resolve(true)
-          }
-        })
+        exec(`"wine ${filePath}"`)
       }
     })
   })
