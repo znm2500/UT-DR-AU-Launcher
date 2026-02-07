@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch, toRaw } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import soulIcon from './assets/spr_soul.png'
 import defaultCover from './assets/default_cover.webp'
 import path from 'path-browserify';
-
+import confirmWav from './assets/sfx/confirm.wav'
+import cancelWav from './assets/sfx/cancel.wav'
+import switchWav from './assets/sfx/switch.wav'
+import saveWav from './assets/sfx/save.wav'
 const availableLanguages = [
     { code: 'en', label: 'English' },
     { code: 'zh', label: '中文' }
@@ -131,17 +134,17 @@ const I18N = {
 // --- SFX (保持不变) ---
 const sfx: { [key: string]: HTMLAudioElement } = {};
 function initSfx() {
-    const SFX_PATHS = {
-        confirm: './src/assets/sfx/confirm.wav',
-        cancel: './src/assets/sfx/cancel.wav',
-        switch: './src/assets/sfx/switch.wav',
-        save: './src/assets/sfx/save.wav'
+    const SFX_MAP = {
+        confirm: confirmWav,
+        cancel: cancelWav,
+        switch: switchWav,
+        save: saveWav
     };
     try {
-        for (const k of Object.keys(SFX_PATHS)) {
-            const aud = new Audio(SFX_PATHS[k]);
+        for (const [key, path] of Object.entries(SFX_MAP)) {
+            const aud = new Audio(path);
             aud.preload = 'auto';
-            sfx[k] = aud;
+            sfx[key] = aud;
         }
     } catch (e) { console.warn('initSfx load failed', e); }
 }
@@ -165,18 +168,7 @@ function readFileAsDataURL(file: File): Promise<string> {
     });
 }
 
-// --- Utils: 优化存储序列化 ---
-// 替代 JSON.parse(JSON.stringify(userGames.value))
-function getRawData(data: any) {
-    // 使用 Vue 的 toRaw 获取原始对象，结合 structuredClone 进行深拷贝（比 JSON 快且支持更多类型）
-    // 如果 window.api 能够直接处理 Proxy，甚至可以直接传 toRaw(data)
-    try {
-        return structuredClone(toRaw(data));
-    } catch (e) {
-        // 降级方案
-        return JSON.parse(JSON.stringify(data));
-    }
-}
+
 
 // --- Reactive State ---
 const force_render_key = ref(0);
@@ -189,7 +181,6 @@ const settings = ref({
     downloadPath: '',
     backgroundImage: '',
     lang: 'en',
-    gamePath: '',
     ignoredVersion: ''
 });
 const showUpdateModal = ref(false);
@@ -317,8 +308,8 @@ function goToDownload() {
 async function ignoreVersion() {
     playSfx('cancel');
     settings.value.ignoredVersion = latestVersion.value;
-    // 使用 toRaw 优化
-    await window.api.setStoreValue('settings', toRaw(settings.value));
+    // 使用 JSON.parse(JSON.stringify 优化
+    await window.api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value)));
     showUpdateModal.value = false;
 }
 
@@ -370,15 +361,15 @@ async function handleAction() {
                 const [movedGame] = userGames.value.splice(indexInUserGames, 1);
                 userGames.value.unshift(movedGame);
 
-                // 优化：使用 getRawData 并在异步中保存，避免阻塞动画
-                window.api.setStoreValue('userGames', getRawData(userGames.value)).catch(console.error);
+                // 优化：使用 JSON.parse(JSON.stringify 并在异步中保存，避免阻塞动画
+                window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value))).catch(console.error);
 
                 selectedIndex.value = 0;
             }
         } catch (err: any) {
             triggerDialog(`${err}`, lang.value.error);
             activeGame.value.playable = false;
-            await window.api.setStoreValue('userGames', getRawData(userGames.value));
+            await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
         }
     } else if (activeGame.value.type === 'remote') {
         if (!navigator.onLine) {
@@ -420,7 +411,7 @@ async function handleAction() {
             delete downloadProgress[game_temp.id];
 
             // 优化保存
-            await window.api.setStoreValue('userGames', getRawData(userGames.value));
+            await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
 
             selectedIndex.value = 0;
             forceRender();
@@ -488,7 +479,7 @@ async function confirmExeImport() {
         }
 
         userGames.value.push(newGame);
-        await window.api.setStoreValue('userGames', getRawData(userGames.value));
+        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
 
         showExeImportModal.value = false;
         selectedIndex.value = filteredList.value.findIndex(g => g.id === newGame.id);
@@ -561,7 +552,7 @@ async function performAupImport() {
         // 并行清理和保存
         await Promise.all([
             window.api.deleteFolder(tmpAupDir.value),
-            window.api.setStoreValue('userGames', getRawData(userGames.value))
+            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)))
         ]);
 
         triggerDialog(lang.value.import_success, lang.value.success, 'save');
@@ -618,7 +609,7 @@ function performExport() {
             isExporting.value = true;
             // 优化：仅深拷贝需要导出的部分
             const gamesToExport = localUserGames.value.filter(g => selectedExportIds.value.has(g.id));
-            await window.api.exportGame(getRawData(gamesToExport), saveDir);
+            await window.api.exportGame(JSON.parse(JSON.stringify(gamesToExport)), saveDir);
             triggerDialog(lang.value.export_success, lang.value.success, 'save');
         } catch (err: any) {
             triggerDialog(`${err}`, lang.value.error);
@@ -653,7 +644,7 @@ function performDelete() {
         // 优化：删除文件和保存配置可以并行，因为内存状态已经更新了
         await Promise.all([
             execution_path ? window.api.deleteFolder(execution_path) : Promise.resolve(),
-            window.api.setStoreValue('userGames', getRawData(userGames.value))
+            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)))
         ]);
     })();
 }
@@ -738,11 +729,11 @@ async function saveSettings() {
 
     // 并行保存 Settings 和 UserGames
     const saveTasks: Promise<any>[] = [
-        window.api.setStoreValue('settings', toRaw(settings.value))
+        window.api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value)))
     ];
 
     if (gameUpdated || tasks.length > 0) { // 如果有图片更新或游戏信息变更
-        saveTasks.push(window.api.setStoreValue('userGames', getRawData(userGames.value)));
+        saveTasks.push(window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value))));
     }
 
     await Promise.all(saveTasks);
@@ -782,24 +773,22 @@ onMounted(async () => {
         });
     }
 
-
     try {
         
         // 1. 发起所有本地读取请求 (并行)
         const pGames = window.api.getStoreValue('userGames', []);
         const pSettings = window.api.getStoreValue('settings', { 
             'lang': 'en', 
-            'downloadPath': window.api.getdownloadpath(), 
+            'downloadPath':await window.api.getdownloadpath(), 
             'backgroundImage': '', 
-            ignoredVersion: currentVersion 
-        });
+            'ignoredVersion': currentVersion 
+        }).catch((err) => {console.error(err)});
 
         // 2. 等待所有本地数据返回 (这是最快的 IO 方式)
         const [games,  savedSettings] = await Promise.all([pGames,  pSettings]);
-
+       
         // 3. 立即应用数据，让界面不再白屏
         userGames.value = games;
-        
         // 合并设置默认值
         settings.value = savedSettings;
 
