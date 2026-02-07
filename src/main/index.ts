@@ -24,18 +24,30 @@ const store = new Store({
 function getdownloadpath(): string {
   return app.getPath('downloads');
 }
-async function downloadFile(url: string, destPath: string): Promise<void> {
+async function downloadFile(url: string, destPath: string, gameId: string, webContents: any): Promise<void> {
   const writer = fs.createWriteStream(destPath);
   const response = await axios({
     url,
     method: 'GET',
     responseType: 'stream',
   });
+
+  const totalLength = parseInt(response.headers['content-length'] || '0', 10);
+  let downloadedLength = 0;
+
+  response.data.on('data', (chunk: Buffer) => {
+    downloadedLength += chunk.length;
+    if (totalLength > 0) {
+      const percent = Math.floor((downloadedLength / totalLength) * 100);
+      // 关键：向渲染进程发送进度
+      webContents.send('download-progress', { id: gameId, percent });
+    }
+  });
+
   response.data.pipe(writer);
   return new Promise<void>((resolve, reject) => {
-    // 明确告诉 resolve 不需要参数
-    writer.on('finish', () => resolve());
-    writer.on('error', (err) => reject(err));
+    writer.on('finish', resolve);
+    writer.on('error', reject);
   });
 }
 async function extract7z(archivePath, outputDir) {
@@ -48,17 +60,7 @@ async function extract7z(archivePath, outputDir) {
     stream.on('error', (err) => reject(err));
   });
 }
-async function handleDownloadAndExtract(downloadUrl: string, destDir: string, filename: string) {
 
-  const savePath = path.join(app.getPath("temp"), filename);
-  try {
-    await downloadFile(downloadUrl, savePath);
-    await extract7z(savePath, destDir);
-    fs.unlinkSync(savePath);
-  } catch (error) {
-    console.error('操作失败:', error);
-  }
-}
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
@@ -169,9 +171,18 @@ ipcMain.handle('open-external-url',async (event, url) => {
       return filePaths[0]
     }
   });
-  ipcMain.handle('download-and-extract', async (_, downloadUrl, destDir, filename) => {
-    await handleDownloadAndExtract(downloadUrl, destDir, filename);
-  });
+ ipcMain.handle('download-and-extract', async (event, downloadUrl, destDir, filename, gameId) => {
+  const savePath = path.join(app.getPath("temp"), filename);
+  try {
+    // 这里的 event.sender 即为 webContents
+    await downloadFile(downloadUrl, savePath, gameId, event.sender);
+    await extract7z(savePath, destDir);
+    // ... 之后执行原有逻辑（删除临时文件等）
+    return true;
+  } catch (error) {
+    throw error;
+  }
+});
   ipcMain.handle('get-store-value', (_, key, value) => {
     console.log(store.get(key, value));
     return store.get(key, value);

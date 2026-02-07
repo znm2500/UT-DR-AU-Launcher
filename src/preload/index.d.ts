@@ -6,7 +6,7 @@ declare global {
     api: {
       openFile: (custom_name:string,extensions:any) => Promise<string>,
       launchGame: (path: string) => Promise<void>,
-      downloadGame: (url: string, destDir: string, filename: string) => Promise<void>,
+      downloadGame: (url: string, destDir: string, filename: string, gameId: string) => Promise<boolean>,
       getdownloadpath: () => string,
       openFolder: () => Promise<string>
       getStoreValue: (key: string, value?: any) => Promise<any>,
@@ -18,6 +18,7 @@ declare global {
       exportGame: (gamesToExport: any[], saveDir: string) => Promise<any>,
       checkIsChinaIP: () => Promise<boolean>,
       openExternal: (url: string) => Promise<void>,
+      onDownloadProgress: (callback: (data: { id: string, percent: number }) => void) => void
     }
   }
 }

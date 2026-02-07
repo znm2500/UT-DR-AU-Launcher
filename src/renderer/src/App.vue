@@ -63,9 +63,9 @@ const I18N = {
         select_export_dir: "请选择导出文件的保存目录",
         import_success: "导入成功!",
         update_title: "版本更新",
-    update_msg: "检测到新版本: ",
-    update_ignore: "[ 再也不显示 ]",
-    update_download: "[ 前往下载 ]"
+        update_msg: "检测到新版本: ",
+        update_ignore: "[ 再也不显示 ]",
+        update_download: "[ 前往下载 ]"
     },
     en: {
         ok: "OK",
@@ -118,9 +118,9 @@ const I18N = {
         import_aup_confirm: "IMPORT SELECTED",
         select_export_dir: "Select directory to save files",
         update_title: "版本更新",
-    update_msg: "检测到新版本: ",
-    update_ignore: "[ 再也不显示 ]",
-    update_download: "[ 前往下载 ]",
+        update_msg: "检测到新版本: ",
+        update_ignore: "[ 再也不显示 ]",
+        update_download: "[ 前往下载 ]",
         import_success: "Import successful!"
     }
 };
@@ -308,40 +308,93 @@ watch(searchInput, () => {
     selectedIndex.value = 0;
 });
 
-function handleAction() {
+async function handleAction() {
+    // 如果没有激活的游戏，或者本地游戏不可玩，或者正在下载中，则直接返回
     if ((!activeGame.value) || (activeGame.value.type === 'local' && !activeGame.value.playable) || (activeGame.value.type === 'downloading')) return;
-    playSfx('confirm');
-    (async () => {
-        if (activeGame.value.type === 'local') {
-            try {
-                await window.api.launchGame(activeGame.value.execution_path);
-            } catch (err: any) {
-                triggerDialog(`${err}`, lang.value.error);
-                activeGame.value.playable = false;
+
+    playSfx('confirm'); // 播放确认音效
+
+    if (activeGame.value.type === 'local') {
+        try {
+            // 启动本地游戏
+            window.api.launchGame(activeGame.value.execution_path);
+
+            // --- 置顶逻辑：游玩后移到最上方 ---
+            const gameId = activeGame.value.id;
+            const indexInUserGames = userGames.value.findIndex(g => g.id === gameId);
+
+            if (indexInUserGames !== -1) {
+                // 从原位置移除并插入到数组首位
+                const [movedGame] = userGames.value.splice(indexInUserGames, 1);
+                userGames.value.unshift(movedGame);
+
+                // 持久化存储更新后的列表顺序
                 await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+
+                // 重置选中索引，让光标跟随到最上方
+                selectedIndex.value = 0;
             }
-        } else if (activeGame.value.type === 'remote') {
-            activeGame.value.type = 'downloading';
-            forceRender();
-            downloadIdSet.add(activeGame.value.id);
-            try {
-                let game_temp = activeGame.value;
-                await window.api.downloadGame(isChinaIP.value ? `https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z` : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`, `${settings.value.downloadPath}/${game_temp.id}`, `${game_temp.id}.7z`);
-                game_temp.type = 'local';
-                game_temp.playable = true;
-                game_temp.execution_path = `${settings.value.downloadPath}/${game_temp.id}/game.exe`;
-                delete game_temp.version;
-                userGames.value.push(game_temp);
-                downloadIdSet.delete(game_temp.id);
-                await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
-            } catch (err: any) {
-                triggerDialog(`${err}`, lang.value.error);
-                activeGame.value.type = 'remote';
-                downloadIdSet.delete(activeGame.value.id);
-                forceRender();
-            }
+        } catch (err: any) {
+            triggerDialog(`${err}`, lang.value.error); // 报错处理
+            activeGame.value.playable = false;
+            await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
         }
-    })();
+    } else if (activeGame.value.type === 'remote') {
+        const game_temp = activeGame.value; // 锁定当前选中的游戏引用
+        game_temp.type = 'downloading';
+        downloadIdSet.add(game_temp.id);
+
+        // --- 进度条初始化 ---
+        downloadProgress[game_temp.id] = 0;
+
+        forceRender(); // 强制触发渲染更新状态
+
+        try {
+            // 根据 IP 区域选择下载链接
+            const url = isChinaIP.value
+                ? `https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`
+                : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`;
+
+            // 调用主进程下载，注意这里增加了第四个参数 game_temp.id
+            await window.api.downloadGame(
+                url,
+                `${settings.value.downloadPath}/${game_temp.id}`,
+                `${game_temp.id}.7z`,
+                game_temp.id
+            );
+
+            // 下载并解压成功后的处理
+            game_temp.type = 'local';
+            game_temp.playable = true;
+            game_temp.execution_path = `${settings.value.downloadPath}/${game_temp.id}/game.exe`;
+            if (game_temp.version) delete game_temp.version;
+
+            // --- 置顶逻辑：下载完后移到最上方 ---
+            // 先尝试从现有列表中移除（防止重复），然后插入头部
+            const existingIndex = userGames.value.findIndex(g => g.id === game_temp.id);
+            if (existingIndex !== -1) {
+                userGames.value.splice(existingIndex, 1);
+            }
+            userGames.value.unshift(JSON.parse(JSON.stringify(game_temp)));
+
+            downloadIdSet.delete(game_temp.id);
+            delete downloadProgress[game_temp.id]; // 下载完成后移除进度记录
+
+            // 保存到本地存储
+            await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+
+            // 选中第一个（即刚下载完的游戏）
+            selectedIndex.value = 0;
+            forceRender();
+
+        } catch (err: any) {
+            triggerDialog(`${err}`, lang.value.error); // 报错处理
+            game_temp.type = 'remote';
+            downloadIdSet.delete(game_temp.id);
+            delete downloadProgress[game_temp.id]; // 失败也移除进度
+            forceRender();
+        }
+    }
 }
 
 // 点击底部 [ 导入 ] 按钮
@@ -677,17 +730,23 @@ function handleBgFileSelect(e: Event) {
     }
 }
 
-
+const downloadProgress = reactive<{ [key: string]: number }>({});
 // --- Lifecycle ---
 onMounted(async () => {
     initSfx();
+    if (window.api.onDownloadProgress) {
+        window.api.onDownloadProgress((data: { id: string, percent: number }) => {
+            // 实时更新对应 ID 的进度值
+            downloadProgress[data.id] = data.percent;
+        });
+    }
     try {
         GITHUB_GAMES.value = [];
         isChinaIP.value = await window.api.checkIsChinaIP();
         console.log('isChinaIP:', isChinaIP.value);
         userGames.value = (await window.api.getStoreValue('userGames', [])) as any[];
         const downloadPath = await window.api.getdownloadpath();
-        settings.value = (await window.api.getStoreValue('settings', { 'lang': 'en', 'downloadPath': downloadPath, 'backgroundImage': '',ignoredVersion: currentVersion })) as any;
+        settings.value = (await window.api.getStoreValue('settings', { 'lang': 'en', 'downloadPath': downloadPath, 'backgroundImage': '', ignoredVersion: currentVersion })) as any;
 
     } catch (error) {
         console.error("Failed to load data on mount:", error);
@@ -702,8 +761,8 @@ onMounted(async () => {
                 const data = await res.json();
                 GITHUB_GAMES.value = data.games;
                 if (data.newest_version !== currentVersion && data.newest_version !== settings.value.ignoredVersion) {
-                showUpdateModal.value = true;
-            }
+                    showUpdateModal.value = true;
+                }
             }
         } catch (error) {
             console.error('Failed to refresh game list:', error);
@@ -721,15 +780,25 @@ onMounted(async () => {
 
         <div id="game-list">
             <div v-for="(game, index) in visibleList" :key="game.id"
-                :class="['game-card', { selected: index === selectedIndex }]" @click="selectGame(index)">
+                :class="['game-card', { selected: index === selectedIndex }]" @click="selectGame(index)"
+                @dblclick="handleAction">
                 <div class="card-left">
                     <img :src="soulIcon" class="soul-icon" draggable="false" />
                     <div class="info-box">
                         <div class="name">{{ game.name[currentLang] }}</div>
                         <div :key="force_render_key"
                             :class="['status', game.type === 'local' ? (game.playable ? 'tag-installed' : 'tag-error') : (game.type === 'downloading' ? 'tag-downloading' : 'tag-download')]">
-                            {{ game.type === 'local' ? (game.playable ? lang.installed : lang.error) :
-                                (game.type === "downloading" ? lang.downloading : lang.to_download) }}
+                            <template v-if="game.type === 'downloading'">
+                                {{ lang.downloading }}
+                                <span v-if="downloadProgress[game.id] !== undefined">
+                                    {{ downloadProgress[game.id] }}%
+                                </span>
+                            </template>
+
+                            <template v-else>
+                                {{ game.type === 'local' ? (game.playable ? lang.installed : lang.error) :
+                                    (game.type === "downloading" ? lang.downloading : lang.to_download) }}
+                            </template>
                         </div>
                     </div>
                 </div>
@@ -760,37 +829,39 @@ onMounted(async () => {
                 ${lang.downloading} ]` : lang.download) : '[ --- ]' }}
             </div>
         </div>
-<Transition name="fade">
-    <div v-if="showUpdateModal" id="update-overlay">
-        <div class="confirm-card" style="width: 450px; text-align: center;">
-            <div class="settings-title" style="color: var(--highlight-color)">
-                [ {{ lang.update_title }} ]
-            </div>
-            <div class="confirm-body" style="margin: 20px 0;">
-                {{ lang.update_msg }} <span style="color: #00FF00;">{{ latestVersion }}</span>
-            </div>
-            <div class="confirm-actions" style="flex-direction: column; gap: 15px;">
-                <div class="btn main enabled" @click="goToDownload" style="font-size: 1.5rem;">
-                    {{ lang.update_download }}
+        <Transition name="fade">
+            <div v-if="showUpdateModal" id="update-overlay">
+                <div class="confirm-card" style="width: 450px; text-align: center;">
+                    <div class="settings-title" style="color: var(--highlight-color)">
+                        [ {{ lang.update_title }} ]
+                    </div>
+                    <div class="confirm-body" style="margin: 20px 0;">
+                        {{ lang.update_msg }} <span style="color: #00FF00;">{{ latestVersion }}</span>
+                    </div>
+                    <div class="confirm-actions" style="flex-direction: column; gap: 15px;">
+                        <div class="btn main enabled" @click="goToDownload" style="font-size: 1.5rem;">
+                            {{ lang.update_download }}
+                        </div>
+                        <div class="btn" @click="ignoreVersion" style="font-size: 1rem; color: #777;">
+                            {{ lang.update_ignore }}
+                        </div>
+                    </div>
                 </div>
-                <div class="btn" @click="ignoreVersion" style="font-size: 1rem; color: #777;">
-                    {{ lang.update_ignore }}
-                </div>
             </div>
-        </div>
-    </div>
-</Transition>
+        </Transition>
         <Transition name="fade">
             <div v-if="showImportTypeModal" id="import-type-overlay">
                 <div class="confirm-card" style="width: 480px;">
-                    <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title }} ]
+                    <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title
+                        }} ]
                     </div>
                     <div class="confirm-actions"
                         style="flex-direction: column; align-items: flex-start; gap: 20px; padding: 0 20px;">
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importExeDirectly">{{
                             lang.import_method_exe }}</div>
-                        <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{ lang.import_method_aup
-                        }}</div>
+                        <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{
+                            lang.import_method_aup
+                            }}</div>
                         <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
                         <div class="btn" style="align-self: center;"
                             @click="showImportTypeModal = false; playSfx('cancel');">{{
@@ -845,7 +916,8 @@ onMounted(async () => {
             <div v-if="showAupImportModal" id="aup-import-overlay">
                 <div class="settings-card">
                     <div class="settings-title">{{ lang.name_aup }}</div>
-                    <div class="settings-body" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+                    <div class="settings-body"
+                        style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
                         <div
                             style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                             <label>{{ lang.import_aup_select_label }}</label>
@@ -892,7 +964,8 @@ onMounted(async () => {
             <div v-if="showExportModal" id="export-overlay">
                 <div class="settings-card">
                     <div class="settings-title">{{ lang.export_title }}</div>
-                    <div class="settings-body" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+                    <div class="settings-body"
+                        style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
                         <div
                             style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                             <label>{{ lang.export_select_label }}</label>
@@ -904,7 +977,8 @@ onMounted(async () => {
                             <div v-for="g in localUserGames" :key="g.id"
                                 :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
                                 @click="toggleExportSelection(g.id)">
-                                <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]' }}</span>
+                                <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
+                                    }}</span>
                                 {{ g.name[currentLang] }}
                             </div>
                         </div>
@@ -938,10 +1012,10 @@ onMounted(async () => {
                         <div style="display:flex;gap:8px;align-items:center;">
                             <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
                                 lang.settings_choose_image
-                                }}</label>
+                            }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                                 settingsForm.bgImageName
-                                }}</div>
+                            }}</div>
                         </div>
                         <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
@@ -960,9 +1034,10 @@ onMounted(async () => {
                             <div style="display:flex;gap:8px;align-items:center;">
                                 <label class="btn" for="setting-game-image-input" id="setting-choose-game-image">{{
                                     lang.settings_choose_image }}</label>
-                                <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
-                                    settingsForm.imageName
-                                }}</div>
+                                <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">
+                                    {{
+                                        settingsForm.imageName
+                                    }}</div>
                             </div>
                             <input type="file" id="setting-game-image-input" @change="handleFileSelect"
                                 accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
@@ -1037,12 +1112,12 @@ onMounted(async () => {
 /* --- Vue 过渡动画 --- */
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.24s ease;
+    transition: opacity 0.24s ease;
 }
 
 .fade-enter-from,
 .fade-leave-to {
-  opacity: 0;
+    opacity: 0;
 }
 
 /* --- 顶部栏 --- */
