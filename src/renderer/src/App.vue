@@ -254,16 +254,14 @@ const fullList = computed(() => {
 
     // 只有当 GITHUB_GAMES 有数据时才处理
     if (GITHUB_GAMES.value.length > 0) {
-        const cdnPrefix = isChinaIP.value
-            ? 'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/'
-            : 'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/';
+
 
         GITHUB_GAMES.value.forEach(g => {
             if (!gameMap.has(g.id)) {
                 g.type = downloadIdSet.has(g.id) ? 'downloading' : 'remote';
                 g.playable = false;
                 // 只有在需要显示时才拼接字符串
-                g.img = `${cdnPrefix}${g.id}.webp`;
+                g.img = `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${g.id}.webp`;
                 g.execution_path = '';
                 gameMap.set(g.id, g);
             }
@@ -826,9 +824,7 @@ onMounted(async () => {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时
 
-            const configUrl = isChinaIP.value 
-                ? 'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/config.json' 
-                : 'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json';
+            const configUrl = 'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json';
 
             const res = await fetch(configUrl, {
                 cache: 'no-store',

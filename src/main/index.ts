@@ -72,6 +72,7 @@ function createWindow(): void {
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
+      webSecurity: false,
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
     }
@@ -110,40 +111,40 @@ app.whenReady().then(() => {
   })
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
- ipcMain.handle('check-local-ip-region', async () => {
-  try {
-    // 尝试获取公网 IP，设置超时防止卡死
-    // publicIpv4 库本身没有简单的超时参数，所以我们依靠 try-catch
-    // 如果断网，publicIpv4 会抛出错误
-    const publicIP = await publicIpv4();
+  ipcMain.handle('check-local-ip-region', async () => {
+    try {
+      // 尝试获取公网 IP，设置超时防止卡死
+      // publicIpv4 库本身没有简单的超时参数，所以我们依靠 try-catch
+      // 如果断网，publicIpv4 会抛出错误
+      const publicIP = await publicIpv4();
 
-    // 2. 查询离线库
-    const searcher = Searcher.newWithFileOnly(Searcher.defaultDbFile)
-    const info = await searcher.search(publicIP);
-    
-    if (!info || !info.region) return false;
-    
-    console.log(info.region, publicIP);
-    const parts = info.region.split('|');
-    if (parts[0] !== '中国') return false;
-    
-    const specialRegions = ['香港', '澳门', '台湾'];
-    if (specialRegions.includes(parts[2])) {
+      // 2. 查询离线库
+      const searcher = Searcher.newWithFileOnly(Searcher.defaultDbFile)
+      const info = await searcher.search(publicIP);
+
+      if (!info || !info.region) return false;
+
+      console.log(info.region, publicIP);
+      const parts = info.region.split('|');
+      if (parts[0] !== '中国') return false;
+
+      const specialRegions = ['香港', '澳门', '台湾'];
+      if (specialRegions.includes(parts[2])) {
+        return false;
+      }
+      return true;
+    } catch (error) {
+      // 关键修复：如果断网或查询失败，打印日志但不抛出错误给前端
+      // 默认返回 false，视为非大陆 IP 或离线状态
+      console.warn('Network offline or IP check failed, defaulting to global config:', error);
       return false;
     }
-    return true;
-  } catch (error) {
-    // 关键修复：如果断网或查询失败，打印日志但不抛出错误给前端
-    // 默认返回 false，视为非大陆 IP 或离线状态
-    console.warn('Network offline or IP check failed, defaulting to global config:', error);
-    return false;
-  }
-});
-ipcMain.handle('open-external-url',async (event, url) => {
-  if (url.startsWith('http://') || url.startsWith('https://')) {
-    shell.openExternal(url);
-  }
-})
+  });
+  ipcMain.handle('open-external-url', async (_, url) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url);
+    }
+  })
   ipcMain.handle('remove-directory', async (_, dirPath) => {
     fs.remove(path.join(dirPath, '..'));
   });
@@ -183,18 +184,18 @@ ipcMain.handle('open-external-url',async (event, url) => {
       return filePaths[0]
     }
   });
- ipcMain.handle('download-and-extract', async (event, downloadUrl, destDir, filename, gameId) => {
-  const savePath = path.join(app.getPath("temp"), filename);
-  try {
-    // 这里的 event.sender 即为 webContents
-    await downloadFile(downloadUrl, savePath, gameId, event.sender);
-    await extract7z(savePath, destDir);
-    // ... 之后执行原有逻辑（删除临时文件等）
-    return true;
-  } catch (error) {
-    throw error;
-  }
-});
+  ipcMain.handle('download-and-extract', async (event, downloadUrl, destDir, filename, gameId) => {
+    const savePath = path.join(app.getPath("temp"), filename);
+    try {
+      // 这里的 event.sender 即为 webContents
+      await downloadFile(downloadUrl, savePath, gameId, event.sender);
+      await extract7z(savePath, destDir);
+      // ... 之后执行原有逻辑（删除临时文件等）
+      return true;
+    } catch (error) {
+      throw error;
+    }
+  });
   ipcMain.handle('get-store-value', (_, key, value) => {
     console.log(store.get(key, value));
     return store.get(key, value);
