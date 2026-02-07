@@ -14,9 +14,9 @@ asarUnpack:
   - resources/**
   - "**/node_modules/7zip-bin/**/*"  # 强制解压 7zip 的二进制文件
 win:
-  executableName: undertaleau-launcher
+  executableName: ${productName}
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: ${productName}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always

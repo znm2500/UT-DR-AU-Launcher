@@ -61,7 +61,11 @@ const I18N = {
         import_aup_select_label: "请选择要从包中导入的游戏:",
         import_aup_confirm: "开始导入",
         select_export_dir: "请选择导出文件的保存目录",
-        import_success: "导入成功!"
+        import_success: "导入成功!",
+        update_title: "版本更新",
+    update_msg: "检测到新版本: ",
+    update_ignore: "[ 再也不显示 ]",
+    update_download: "[ 前往下载 ]"
     },
     en: {
         ok: "OK",
@@ -113,6 +117,10 @@ const I18N = {
         import_aup_select_label: "Select games to import from package:",
         import_aup_confirm: "IMPORT SELECTED",
         select_export_dir: "Select directory to save files",
+        update_title: "版本更新",
+    update_msg: "检测到新版本: ",
+    update_ignore: "[ 再也不显示 ]",
+    update_download: "[ 前往下载 ]",
         import_success: "Import successful!"
     }
 };
@@ -149,12 +157,16 @@ const force_render_key = ref(0);
 const searchInput = ref('');
 const GITHUB_GAMES = ref<any[]>([]);
 const userGames = ref<any[]>([]);
+const currentVersion = '1.0.0';
+const latestVersion = ref('');
 const settings = ref({
     downloadPath: '',
     backgroundImage: '',
     lang: 'en',
-    gamePath: ''
+    gamePath: '',
+    ignoredVersion: ''
 });
+const showUpdateModal = ref(false);
 const showExeImportModal = ref(false);
 const exeImportForm = reactive({
     name: '',
@@ -189,6 +201,7 @@ const showAupImportModal = ref(false);     // AUP 内部列表显示
 const aupPendingGames = ref<any[]>([]);    // 解析出来的游戏
 const selectedAupIds = ref<Set<string>>(new Set()); // AUP 选中项
 const tmpAupDir = ref('');
+const isChinaIP = ref(false);
 // --- Computed Properties ---
 const lang = computed(() => I18N[currentLang.value] || I18N.en);
 function forceRender() {
@@ -210,7 +223,7 @@ const fullList = computed(() => {
         if (!gameMap.has(g.id)) {
             g.type = downloadIdSet.has(g.id) ? 'downloading' : 'remote';
             g.playable = false;
-            g.img = `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${g.id}.webp`;
+            g.img = isChinaIP.value ? `https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/${g.id}.webp` : `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${g.id}.webp`;
             g.execution_path = '';
             gameMap.set(g.id, g);
         }
@@ -250,7 +263,19 @@ function selectGame(index: number) {
 
 const showErrorModal = ref(false);
 const errorMessage = ref('');
+function goToDownload() {
+    playSfx('confirm');
+    window.api.openExternal(isChinaIP.value ? 'https://gitcode.com/znm1145/UT-DR-AU-Launcher/releases' : 'https://github.com/znm2500/UT-DR-AU-Launcher/releases'); // 假设你的 preload 暴露了打开外部链接的方法
+    showUpdateModal.value = false;
+}
 
+// 忽略该版本
+async function ignoreVersion() {
+    playSfx('cancel');
+    settings.value.ignoredVersion = latestVersion.value;
+    await window.api.setStoreValue('settings', toRaw(settings.value));
+    showUpdateModal.value = false;
+}
 function browseDownloadPath() {
     playSfx('confirm');
     (async () => {
@@ -301,7 +326,7 @@ function handleAction() {
             downloadIdSet.add(activeGame.value.id);
             try {
                 let game_temp = activeGame.value;
-                await window.api.downloadGame(`https://github.com/znm2500/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`, `${settings.value.downloadPath}/${game_temp.id}`, `${game_temp.id}.7z`);
+                await window.api.downloadGame(isChinaIP.value ? `https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z` : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`, `${settings.value.downloadPath}/${game_temp.id}`, `${game_temp.id}.7z`);
                 game_temp.type = 'local';
                 game_temp.playable = true;
                 game_temp.execution_path = `${settings.value.downloadPath}/${game_temp.id}/game.exe`;
@@ -656,12 +681,13 @@ function handleBgFileSelect(e: Event) {
 // --- Lifecycle ---
 onMounted(async () => {
     initSfx();
-
     try {
         GITHUB_GAMES.value = [];
+        isChinaIP.value = await window.api.checkIsChinaIP();
+        console.log('isChinaIP:', isChinaIP.value);
         userGames.value = (await window.api.getStoreValue('userGames', [])) as any[];
         const downloadPath = await window.api.getdownloadpath();
-        settings.value = (await window.api.getStoreValue('settings', { 'lang': 'en', 'downloadPath': downloadPath, 'backgroundImage': '' })) as any;
+        settings.value = (await window.api.getStoreValue('settings', { 'lang': 'en', 'downloadPath': downloadPath, 'backgroundImage': '',ignoredVersion: currentVersion })) as any;
 
     } catch (error) {
         console.error("Failed to load data on mount:", error);
@@ -669,11 +695,15 @@ onMounted(async () => {
 
     (async () => {
         try {
-            const res = await fetch('https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/game_index.json', {
+            const res = await fetch(isChinaIP.value ? 'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/conig.json' : 'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json', {
                 cache: 'no-store' // 告诉浏览器完全忽略缓存，直接向服务器发请求
             });
             if (res.ok) {
-                GITHUB_GAMES.value = await res.json();
+                const data = await res.json();
+                GITHUB_GAMES.value = data.games;
+                if (data.newest_version !== currentVersion && data.newest_version !== settings.value.ignoredVersion) {
+                showUpdateModal.value = true;
+            }
             }
         } catch (error) {
             console.error('Failed to refresh game list:', error);
@@ -730,7 +760,26 @@ onMounted(async () => {
                 ${lang.downloading} ]` : lang.download) : '[ --- ]' }}
             </div>
         </div>
-
+<Transition name="fade">
+    <div v-if="showUpdateModal" id="update-overlay">
+        <div class="confirm-card" style="width: 450px; text-align: center;">
+            <div class="settings-title" style="color: var(--highlight-color)">
+                [ {{ lang.update_title }} ]
+            </div>
+            <div class="confirm-body" style="margin: 20px 0;">
+                {{ lang.update_msg }} <span style="color: #00FF00;">{{ latestVersion }}</span>
+            </div>
+            <div class="confirm-actions" style="flex-direction: column; gap: 15px;">
+                <div class="btn main enabled" @click="goToDownload" style="font-size: 1.5rem;">
+                    {{ lang.update_download }}
+                </div>
+                <div class="btn" @click="ignoreVersion" style="font-size: 1rem; color: #777;">
+                    {{ lang.update_ignore }}
+                </div>
+            </div>
+        </div>
+    </div>
+</Transition>
         <Transition name="fade">
             <div v-if="showImportTypeModal" id="import-type-overlay">
                 <div class="confirm-card" style="width: 480px;">
@@ -1224,7 +1273,8 @@ onMounted(async () => {
 #export-overlay,
 #import-type-overlay,
 #aup-import-overlay,
-#exe-import-overlay {
+#exe-import-overlay,
+#update-overlay {
     position: fixed;
     inset: 0;
     display: flex;

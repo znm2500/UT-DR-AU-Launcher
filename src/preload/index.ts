@@ -22,6 +22,8 @@ api.saveFile = (name, extensions) => ipcRenderer.invoke('save-file', name, exten
 api.getStoreValue = (key, value) => ipcRenderer.invoke('get-store-value', key, value);
 api.setStoreValue = (key, value) => ipcRenderer.invoke('set-store-value', key, value);
 api.exportGame = (gamesToExport, saveDir) => ipcRenderer.invoke('export-game', gamesToExport, saveDir);
+api.checkIsChinaIP = () => ipcRenderer.invoke('check-local-ip-region');
+api.openExternal = (url: string) => ipcRenderer.invoke('open-external-url', url);
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
 // just add to the DOM global.

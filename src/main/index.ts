@@ -10,10 +10,11 @@ import Seven from 'node-7z';
 import sevenBin from '7zip-bin';
 import Store from 'electron-store';
 import fastFolderSize from 'fast-folder-size';
-import { promisify } from 'util'
+import { promisify } from 'util';
+import * as Searcher from 'ip2region-ts';
 let _7zPath = sevenBin.path7za;
 if (process.env.NODE_ENV !== 'development') {
-    _7zPath = _7zPath.replace('app.asar', 'app.asar.unpacked');
+  _7zPath = _7zPath.replace('app.asar', 'app.asar.unpacked');
 }
 const getSize = promisify(fastFolderSize);
 const store = new Store({
@@ -106,8 +107,29 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
+  ipcMain.handle('check-local-ip-region', async () => {
+    const { data } = await axios.get('https://api.ipify.org?format=json');
+    const publicIP = data.ip;
 
+    // 2. 查询离线库
+    const searcher = Searcher.newWithFileOnly(Searcher.defaultDbFile)
+    const info = await searcher.search(publicIP);
+    if(!info.region)
+      return false;
+    const parts = info.region.split('|');
+    if (parts[0] !== '中国') return false;
+    const specialRegions = ['香港', '澳门', '台湾'];
+    if (specialRegions.includes(parts[2])) {
+      return false;
+    }
+    return true;
 
+  });
+ipcMain.handle('open-external-url',async (event, url) => {
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    shell.openExternal(url);
+  }
+})
   ipcMain.handle('remove-directory', async (_, dirPath) => {
     fs.remove(path.join(dirPath, '..'));
   });
@@ -160,99 +182,111 @@ app.whenReady().then(() => {
   ipcMain.handle('get-download-path', () => {
     return getdownloadpath();
   });
- ipcMain.handle('get-aup-config', async (_, archivePath) => {
-  // 生成临时目录
-  const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random().toString(36).slice(2)}`);
-  
-  try {
-    // 1. 必须 await 这个异步解压过程
-    await extract7z(archivePath, tempDir);
-    
-    // 2. 解压完成后读取文件
-    const configPath = path.join(tempDir, 'config.json');
-    const jsonRaw = fs.readFileSync(configPath, 'utf8');
-    const games = JSON.parse(jsonRaw);
-    
-    // 3. 显式返回结果给渲染进程
-    return { games, tempDir }; 
-  } catch (error) {
-    console.error('解析 AUP 失败:', error);
-    throw error; // 抛出错误，渲染进程的 try-catch 就能捕获到
-  }
-});
+  ipcMain.handle('get-aup-config', async (_, archivePath) => {
+    // 生成临时目录
+    const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+
+    try {
+      // 1. 必须 await 这个异步解压过程
+      await extract7z(archivePath, tempDir);
+
+      // 2. 解压完成后读取文件
+      const configPath = path.join(tempDir, 'config.json');
+      const jsonRaw = fs.readFileSync(configPath, 'utf8');
+      const games = JSON.parse(jsonRaw);
+
+      // 3. 显式返回结果给渲染进程
+      return { games, tempDir };
+    } catch (error) {
+      console.error('解析 AUP 失败:', error);
+      throw error; // 抛出错误，渲染进程的 try-catch 就能捕获到
+    }
+  });
   ipcMain.handle('move-folder', async (_, archivePath, destDir) => {
     fs.move(archivePath, destDir);
   })
   ipcMain.handle('export-game', async (_, gamesToExport, saveDir) => {
-  const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
-  
-  try {
-    await fs.ensureDir(tempDir);
-    await fs.writeJson(path.join(tempDir, 'config.json'), gamesToExport);
+    const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
 
-    // 1. 构造任务数组 (不使用 await，先创建 Promise)
-    const copyPromises = gamesToExport.map(async (metadata) => {
-      const gameRoot = path.join(metadata.execution_path, '..');
-      const gameDestDir = path.join(tempDir, metadata.id);
-      
-      // 确保目标子目录存在
-      await fs.ensureDir(gameDestDir);
+    try {
+      await fs.ensureDir(tempDir);
+      await fs.writeJson(path.join(tempDir, 'config.json'), gamesToExport);
 
-      const fileSize: any = await getSize(gameRoot);
+      // 1. 构造任务数组 (不使用 await，先创建 Promise)
+      const copyPromises = gamesToExport.map(async (metadata) => {
+        const gameRoot = path.join(metadata.execution_path, '..');
+        const gameDestDir = path.join(tempDir, metadata.id);
 
-      if (fileSize < 2147483648) { // 2GB
-        // 使用异步版本 fs.copy 而不是 copySync
-        return fs.copy(gameRoot, gameDestDir);
-      } else {
-        const destExePath = path.join(gameDestDir, path.basename(metadata.execution_path));
-        return fs.copyFile(metadata.execution_path, destExePath);
-      }
-    });
+        // 确保目标子目录存在
+        await fs.ensureDir(gameDestDir);
 
-    // 2. 并行执行所有复制任务，并等待它们全部完成
-    // Promise.all 会在所有任务成功时 resolve，只要有一个失败就会 reject
-    await Promise.all(copyPromises);
+        const fileSize: any = await getSize(gameRoot);
 
-    // 3. 执行压缩任务
-    return new Promise((resolve, reject) => {
-      const myStream = Seven.add(saveDir, path.join(tempDir, '*'), {
-        $bin: _7zPath,
-        recursive: true
-      });
-
-      myStream.on('end', async () => {
-        try {
-          await fs.remove(tempDir);
-          resolve(true);
-        } catch (cleanupErr) {
-          resolve(true); 
+        if (fileSize < 2147483648) { // 2GB
+          // 使用异步版本 fs.copy 而不是 copySync
+          return fs.copy(gameRoot, gameDestDir);
+        } else {
+          const destExePath = path.join(gameDestDir, path.basename(metadata.execution_path));
+          return fs.copyFile(metadata.execution_path, destExePath);
         }
       });
 
-      myStream.on('error', async (err) => {
-        await fs.remove(tempDir);
-        reject(err);
-      });
-    });
+      // 2. 并行执行所有复制任务，并等待它们全部完成
+      // Promise.all 会在所有任务成功时 resolve，只要有一个失败就会 reject
+      await Promise.all(copyPromises);
 
-  } catch (error) {
-    if (await fs.pathExists(tempDir)) {
-      await fs.remove(tempDir);
+      // 3. 执行压缩任务
+      return new Promise((resolve, reject) => {
+        const myStream = Seven.add(saveDir, path.join(tempDir, '*'), {
+          $bin: _7zPath,
+          recursive: true
+        });
+
+        myStream.on('end', async () => {
+          try {
+            await fs.remove(tempDir);
+            resolve(true);
+          } catch (cleanupErr) {
+            resolve(true);
+          }
+        });
+
+        myStream.on('error', async (err) => {
+          await fs.remove(tempDir);
+          reject(err);
+        });
+      });
+
+    } catch (error) {
+      if (await fs.pathExists(tempDir)) {
+        await fs.remove(tempDir);
+      }
+      throw error;
     }
-    throw error;
-  }
-});
+  });
   ipcMain.handle('launch-game', async (_, filePath) => {
     return new Promise((resolve, reject) => {
       // 使用引号包裹路径，防止空格导致解析失败
-      exec(`"${filePath}"`, (error) => {
-        if (error) {
-          console.error('启动失败:', error)
-          reject(error.message)
-        } else {
-          resolve(true)
-        }
-      })
+      if (process.platform === 'win32') {
+        exec(`"${filePath}"`, (error) => {
+          if (error) {
+            console.error('启动失败:', error)
+            reject(error.message)
+          } else {
+            resolve(true)
+          }
+        })
+      }
+      else {
+        exec(`"wine ${filePath}"`, (error) => {
+          if (error) {
+            console.error('启动失败:', error)
+            reject(error.message)
+          } else {
+            resolve(true)
+          }
+        })
+      }
     })
   })
   createWindow();

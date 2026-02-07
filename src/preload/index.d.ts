@@ -16,6 +16,8 @@ declare global {
       moveFolder: (archivePath: string, destDir: string) => Promise<void>,
       saveFile: (name: string, extensions: string[]) => Promise<string>,
       exportGame: (gamesToExport: any[], saveDir: string) => Promise<any>,
+      checkIsChinaIP: () => Promise<boolean>,
+      openExternal: (url: string) => Promise<void>,
     }
   }
 }
