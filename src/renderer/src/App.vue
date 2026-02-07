@@ -9,7 +9,7 @@ const availableLanguages = [
     { code: 'zh', label: '中文' }
 ];
 
-// --- I18N ---
+// --- I18N (保持不变) ---
 const I18N = {
     zh: {
         ok: "确定",
@@ -65,7 +65,9 @@ const I18N = {
         update_title: "版本更新",
         update_msg: "检测到新版本: ",
         update_ignore: "[ 再也不显示 ]",
-        update_download: "[ 前往下载 ]"
+        update_download: "[ 前往下载 ]",
+        network_disconnected: "网络已断开!"
+
     },
     en: {
         ok: "OK",
@@ -121,11 +123,12 @@ const I18N = {
         update_msg: "检测到新版本: ",
         update_ignore: "[ 再也不显示 ]",
         update_download: "[ 前往下载 ]",
-        import_success: "Import successful!"
+        import_success: "Import successful!",
+        network_disconnected: "Network disconnected!"
     }
 };
 
-// --- SFX ---
+// --- SFX (保持不变) ---
 const sfx: { [key: string]: HTMLAudioElement } = {};
 function initSfx() {
     const SFX_PATHS = {
@@ -151,6 +154,29 @@ function playSfx(name: string) {
     } catch (err) { console.warn('playSfx error', err); }
 }
 
+// --- Utils: 优化文件读取 ---
+// 将 FileReader 封装为 Promise，方便使用 await 并行处理
+function readFileAsDataURL(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target?.result as string || '');
+        reader.onerror = (e) => reject(e);
+        reader.readAsDataURL(file);
+    });
+}
+
+// --- Utils: 优化存储序列化 ---
+// 替代 JSON.parse(JSON.stringify(userGames.value))
+function getRawData(data: any) {
+    // 使用 Vue 的 toRaw 获取原始对象，结合 structuredClone 进行深拷贝（比 JSON 快且支持更多类型）
+    // 如果 window.api 能够直接处理 Proxy，甚至可以直接传 toRaw(data)
+    try {
+        return structuredClone(toRaw(data));
+    } catch (e) {
+        // 降级方案
+        return JSON.parse(JSON.stringify(data));
+    }
+}
 
 // --- Reactive State ---
 const force_render_key = ref(0);
@@ -196,19 +222,22 @@ const showExportModal = ref(false);
 const selectedExportIds = ref<Set<string>>(new Set());
 const isExporting = ref(false);
 const errorTitle = ref('');
-const showImportTypeModal = ref(false);    // 导入方式选择显示
-const showAupImportModal = ref(false);     // AUP 内部列表显示
-const aupPendingGames = ref<any[]>([]);    // 解析出来的游戏
-const selectedAupIds = ref<Set<string>>(new Set()); // AUP 选中项
+const showImportTypeModal = ref(false);
+const showAupImportModal = ref(false);
+const aupPendingGames = ref<any[]>([]);
+const selectedAupIds = ref<Set<string>>(new Set());
 const tmpAupDir = ref('');
 const isChinaIP = ref(false);
+const errorMessage = ref('');
+const showErrorModal = ref(false);
+const downloadProgress = reactive<{ [key: string]: number }>({});
+
 // --- Computed Properties ---
 const lang = computed(() => I18N[currentLang.value] || I18N.en);
 function forceRender() {
     force_render_key.value++;
 }
 
-// 动态背景样式
 const appBackgroundStyle = computed(() => {
     if (settings.value.backgroundImage) {
         return { backgroundImage: `url(${settings.value.backgroundImage})` };
@@ -216,27 +245,46 @@ const appBackgroundStyle = computed(() => {
     return {};
 });
 
+// 优化：fullList 计算属性
+// 这里本身逻辑不复杂，但为了避免频繁重建 Set，逻辑保持清晰即可
 const fullList = computed(() => {
     const gameMap = new Map();
+    // 先添加本地游戏
     userGames.value.forEach(g => gameMap.set(g.id, g));
-    GITHUB_GAMES.value.forEach(g => {
-        if (!gameMap.has(g.id)) {
-            g.type = downloadIdSet.has(g.id) ? 'downloading' : 'remote';
-            g.playable = false;
-            g.img = isChinaIP.value ? `https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/${g.id}.webp` : `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${g.id}.webp`;
-            g.execution_path = '';
-            gameMap.set(g.id, g);
-        }
-    });
+
+    // 只有当 GITHUB_GAMES 有数据时才处理
+    if (GITHUB_GAMES.value.length > 0) {
+        const cdnPrefix = isChinaIP.value
+            ? 'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/'
+            : 'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/';
+
+        GITHUB_GAMES.value.forEach(g => {
+            if (!gameMap.has(g.id)) {
+                g.type = downloadIdSet.has(g.id) ? 'downloading' : 'remote';
+                g.playable = false;
+                // 只有在需要显示时才拼接字符串
+                g.img = `${cdnPrefix}${g.id}.webp`;
+                g.execution_path = '';
+                gameMap.set(g.id, g);
+            }
+        });
+    }
     return Array.from(gameMap.values());
 });
 
 const filteredList = computed(() => {
-    const query = searchInput.value.toLowerCase();
+    const query = searchInput.value.toLowerCase().trim(); // 增加 trim
     if (!query) return fullList.value;
     return fullList.value.filter(g => {
+        // 优化搜索：优先匹配名称，减少对其他字段的遍历
+        if (g.name && typeof g.name === 'object') {
+            if (g.name.zh?.toLowerCase().includes(query) || g.name.en?.toLowerCase().includes(query)) return true;
+        }
+        // 只有名字没匹配到，才去遍历所有属性 (兜底)
         for (const k of Object.keys(g)) {
-            if (g[k] && g[k].toLowerCase().includes(query)) return true;
+            // 跳过大对象或无关字段
+            if (k === 'img' || k === 'desc') continue;
+            if (typeof g[k] === 'string' && g[k].toLowerCase().includes(query)) return true;
         }
         return false;
     });
@@ -254,6 +302,7 @@ const localUserGames = computed(() => {
 const isAllSelected = computed(() => {
     return localUserGames.value.length > 0 && selectedExportIds.value.size === localUserGames.value.length;
 });
+
 // --- Methods ---
 
 function selectGame(index: number) {
@@ -261,21 +310,20 @@ function selectGame(index: number) {
     selectedIndex.value = index;
 }
 
-const showErrorModal = ref(false);
-const errorMessage = ref('');
 function goToDownload() {
     playSfx('confirm');
-    window.api.openExternal(isChinaIP.value ? 'https://gitcode.com/znm1145/UT-DR-AU-Launcher/releases' : 'https://github.com/znm2500/UT-DR-AU-Launcher/releases'); // 假设你的 preload 暴露了打开外部链接的方法
+    window.api.openExternal(isChinaIP.value ? 'https://gitcode.com/znm1145/UT-DR-AU-Launcher/releases' : 'https://github.com/znm2500/UT-DR-AU-Launcher/releases');
     showUpdateModal.value = false;
 }
 
-// 忽略该版本
 async function ignoreVersion() {
     playSfx('cancel');
     settings.value.ignoredVersion = latestVersion.value;
+    // 使用 toRaw 优化
     await window.api.setStoreValue('settings', toRaw(settings.value));
     showUpdateModal.value = false;
 }
+
 function browseDownloadPath() {
     playSfx('confirm');
     (async () => {
@@ -309,53 +357,48 @@ watch(searchInput, () => {
 });
 
 async function handleAction() {
-    // 如果没有激活的游戏，或者本地游戏不可玩，或者正在下载中，则直接返回
     if ((!activeGame.value) || (activeGame.value.type === 'local' && !activeGame.value.playable) || (activeGame.value.type === 'downloading')) return;
 
-    playSfx('confirm'); // 播放确认音效
+    playSfx('confirm');
 
     if (activeGame.value.type === 'local') {
         try {
-            // 启动本地游戏
             window.api.launchGame(activeGame.value.execution_path);
 
-            // --- 置顶逻辑：游玩后移到最上方 ---
             const gameId = activeGame.value.id;
             const indexInUserGames = userGames.value.findIndex(g => g.id === gameId);
 
             if (indexInUserGames !== -1) {
-                // 从原位置移除并插入到数组首位
                 const [movedGame] = userGames.value.splice(indexInUserGames, 1);
                 userGames.value.unshift(movedGame);
 
-                // 持久化存储更新后的列表顺序
-                await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+                // 优化：使用 getRawData 并在异步中保存，避免阻塞动画
+                window.api.setStoreValue('userGames', getRawData(userGames.value)).catch(console.error);
 
-                // 重置选中索引，让光标跟随到最上方
                 selectedIndex.value = 0;
             }
         } catch (err: any) {
-            triggerDialog(`${err}`, lang.value.error); // 报错处理
+            triggerDialog(`${err}`, lang.value.error);
             activeGame.value.playable = false;
-            await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+            await window.api.setStoreValue('userGames', getRawData(userGames.value));
         }
     } else if (activeGame.value.type === 'remote') {
-        const game_temp = activeGame.value; // 锁定当前选中的游戏引用
+        if (!navigator.onLine) {
+            triggerDialog(lang.value.network_disconnected, lang.value.error);
+
+            return;
+        }
+        const game_temp = activeGame.value;
         game_temp.type = 'downloading';
         downloadIdSet.add(game_temp.id);
-
-        // --- 进度条初始化 ---
         downloadProgress[game_temp.id] = 0;
-
-        forceRender(); // 强制触发渲染更新状态
+        forceRender();
 
         try {
-            // 根据 IP 区域选择下载链接
             const url = isChinaIP.value
                 ? `https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`
                 : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`;
 
-            // 调用主进程下载，注意这里增加了第四个参数 game_temp.id
             await window.api.downloadGame(
                 url,
                 `${settings.value.downloadPath}/${game_temp.id}`,
@@ -363,61 +406,52 @@ async function handleAction() {
                 game_temp.id
             );
 
-            // 下载并解压成功后的处理
             game_temp.type = 'local';
             game_temp.playable = true;
             game_temp.execution_path = `${settings.value.downloadPath}/${game_temp.id}/game.exe`;
             if (game_temp.version) delete game_temp.version;
 
-            // --- 置顶逻辑：下载完后移到最上方 ---
-            // 先尝试从现有列表中移除（防止重复），然后插入头部
             const existingIndex = userGames.value.findIndex(g => g.id === game_temp.id);
             if (existingIndex !== -1) {
                 userGames.value.splice(existingIndex, 1);
             }
+            // 使用深拷贝断开引用
             userGames.value.unshift(JSON.parse(JSON.stringify(game_temp)));
 
             downloadIdSet.delete(game_temp.id);
-            delete downloadProgress[game_temp.id]; // 下载完成后移除进度记录
+            delete downloadProgress[game_temp.id];
 
-            // 保存到本地存储
-            await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+            // 优化保存
+            await window.api.setStoreValue('userGames', getRawData(userGames.value));
 
-            // 选中第一个（即刚下载完的游戏）
             selectedIndex.value = 0;
             forceRender();
 
         } catch (err: any) {
-            triggerDialog(`${err}`, lang.value.error); // 报错处理
+            triggerDialog(`${err}`, lang.value.error);
             game_temp.type = 'remote';
             downloadIdSet.delete(game_temp.id);
-            delete downloadProgress[game_temp.id]; // 失败也移除进度
+            delete downloadProgress[game_temp.id];
             forceRender();
         }
     }
 }
 
-// 点击底部 [ 导入 ] 按钮
 function importGame() {
     playSfx('confirm');
     showImportTypeModal.value = true;
 }
 
-// 方式 1: 传统 EXE 导入 (保留你原本的功能)
 function importExeDirectly() {
-    showImportTypeModal.value = false; // 关闭选择类型的弹窗
-
-    // 重置表单
+    showImportTypeModal.value = false;
     exeImportForm.name = '';
     exeImportForm.path = '';
     exeImportForm.image = null;
     exeImportForm.imageName = lang.value.settings_image_not_chosen;
-
     playSfx('confirm');
-    showExeImportModal.value = true; // 打开新的详细导入弹窗
+    showExeImportModal.value = true;
 }
 
-// 新增：浏览 EXE 路径
 function browseExeImportPath() {
     playSfx('confirm');
     (async () => {
@@ -425,11 +459,9 @@ function browseExeImportPath() {
         if (result) {
             exeImportForm.path = result;
         }
-
     })();
 }
 
-// 新增：处理封面图片选择
 function handleExeImportImageSelect(e: Event) {
     const input = e.target as HTMLInputElement;
     if (input.files && input.files[0]) {
@@ -438,11 +470,8 @@ function handleExeImportImageSelect(e: Event) {
     }
 }
 
-// 新增：确认导入逻辑
-function confirmExeImport() {
-    // 只有名称填写了才能继续
+async function confirmExeImport() {
     if (!exeImportForm.name || !exeImportForm.path) return;
-
     playSfx('save');
 
     const newGame = {
@@ -450,42 +479,33 @@ function confirmExeImport() {
         name: { en: exeImportForm.name, zh: exeImportForm.name },
         type: 'local',
         playable: true,
-        execution_path: exeImportForm.path, // 使用填写的路径
+        execution_path: exeImportForm.path,
         img: defaultCover
     };
 
-    const finalize = async () => {
+    try {
+        // 优化：使用 await 处理图片读取
+        if (exeImportForm.image) {
+            newGame.img = await readFileAsDataURL(exeImportForm.image);
+        }
+
         userGames.value.push(newGame);
-        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+        await window.api.setStoreValue('userGames', getRawData(userGames.value));
 
-        showExeImportModal.value = false; // 关闭弹窗
-
-        // 自动定位到新游戏
+        showExeImportModal.value = false;
         selectedIndex.value = filteredList.value.findIndex(g => g.id === newGame.id);
         triggerDialog(lang.value.success, lang.value.success, 'save');
-    };
-
-    // 如果用户选了图，先读取图片 base64
-    if (exeImportForm.image) {
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            if (e.target?.result) {
-                newGame.img = e.target.result as string;
-            }
-            await finalize();
-        };
-        reader.readAsDataURL(exeImportForm.image);
-    } else {
-        finalize();
+    } catch (err) {
+        console.error(err);
+        triggerDialog("Import Failed", lang.value.error);
     }
 }
 
-// 新增：取消导入
 function cancelExeImport() {
     playSfx('cancel');
     showExeImportModal.value = false;
 }
-// 方式 2: AUP 包导入逻辑
+
 async function importFromAup() {
     showImportTypeModal.value = false;
     try {
@@ -493,7 +513,6 @@ async function importFromAup() {
         if (!filePath) return;
 
         playSfx('confirm');
-        // 调用后端 API 解压并解析 7z 中的 json
         const aupdata = await window.api.parseAup(filePath);
         const games = aupdata.games;
         tmpAupDir.value = aupdata.tempDir;
@@ -507,7 +526,6 @@ async function importFromAup() {
     }
 }
 
-// AUP 全选/反选 (逻辑与你的导出全选一致)
 const isAllAupSelected = computed(() => {
     return aupPendingGames.value.length > 0 && selectedAupIds.value.size === aupPendingGames.value.length;
 });
@@ -521,33 +539,32 @@ function toggleSelectAllAup() {
     }
 }
 
-// 执行 AUP 导入
 async function performAupImport() {
     if (selectedAupIds.value.size === 0) return;
 
     try {
         const gamesToAdd = aupPendingGames.value.filter(g => selectedAupIds.value.has(g.id));
 
-        // 1. 构造 Promise 数组，实现真正的并行移动
+        // 并行移动文件夹
         const moveTasks = gamesToAdd.map(async (g) => {
             const destDir = path.join(settings.value.downloadPath, g.id);
             const newExecPath = path.join(destDir, path.basename(g.execution_path));
 
-            // 更新本地状态
+            // 重要：先执行文件系统操作
+            await window.api.moveFolder(path.join(tmpAupDir.value, g.id), destDir);
+
+            // 成功后再推入 userGames，避免部分失败导致状态不一致
             const newG = { ...g, execution_path: newExecPath };
             userGames.value.push(newG);
-
-            // 执行移动并返回 Promise
-            // 假设 moveFolder 返回的是 Promise
-            return window.api.moveFolder(path.join(tmpAupDir.value, g.id), destDir);
         });
 
-        // 2. 等待所有“搬家”任务完成
         await Promise.all(moveTasks);
 
-        // 3. 此时再清理临时目录和保存配置（绝对安全）
-        await window.api.deleteFolder(tmpAupDir.value);
-        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+        // 并行清理和保存
+        await Promise.all([
+            window.api.deleteFolder(tmpAupDir.value),
+            window.api.setStoreValue('userGames', getRawData(userGames.value))
+        ]);
 
         triggerDialog(lang.value.import_success, lang.value.success, 'save');
     } catch (err: any) {
@@ -558,7 +575,6 @@ async function performAupImport() {
     }
 }
 
-// 导出功能方法
 function openExportModal() {
     if (localUserGames.value.length === 0) return;
     playSfx('confirm');
@@ -591,6 +607,7 @@ function toggleSelectAll() {
         });
     }
 }
+
 function performExport() {
     if (selectedExportIds.value.size === 0) return;
 
@@ -600,10 +617,10 @@ function performExport() {
         try {
             const saveDir = await window.api.saveFile(lang.value.name_aup, ['aup']);
             if (!saveDir) return;
-            console.log('Exported to', saveDir);
             isExporting.value = true;
+            // 优化：仅深拷贝需要导出的部分
             const gamesToExport = localUserGames.value.filter(g => selectedExportIds.value.has(g.id));
-            await window.api.exportGame(JSON.parse(JSON.stringify(gamesToExport)), saveDir);
+            await window.api.exportGame(getRawData(gamesToExport), saveDir);
             triggerDialog(lang.value.export_success, lang.value.success, 'save');
         } catch (err: any) {
             triggerDialog(`${err}`, lang.value.error);
@@ -612,7 +629,6 @@ function performExport() {
         }
     })();
 }
-
 
 function confirmDelete() {
     if (activeGame.value && activeGame.value.type === 'local') {
@@ -624,18 +640,23 @@ function confirmDelete() {
 function performDelete() {
     playSfx('confirm');
     let execution_path;
-    userGames.value = userGames.value.filter((g) => {
-        if (g.id === activeGame.value.id) {
-            execution_path = g.execution_path;
-            return false;
-        }
-        return true;
-    });
+    // 寻找要删除的路径
+    const gameId = activeGame.value.id;
+    const game = userGames.value.find(g => g.id === gameId);
+    if (game) execution_path = game.execution_path;
+
+    // 更新内存状态
+    userGames.value = userGames.value.filter(g => g.id !== gameId);
+
     selectedIndex.value = 0;
     showConfirmDelete.value = false;
+
     (async () => {
-        await window.api.deleteFolder(execution_path);
-        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+        // 优化：删除文件和保存配置可以并行，因为内存状态已经更新了
+        await Promise.all([
+            execution_path ? window.api.deleteFolder(execution_path) : Promise.resolve(),
+            window.api.setStoreValue('userGames', getRawData(userGames.value))
+        ]);
     })();
 }
 
@@ -654,59 +675,80 @@ function browseGamePath() {
     })();
 }
 
-
 function openSettings() {
     playSfx('confirm');
     settingsForm.downloadPath = settings.value.downloadPath;
     settingsForm.lang = settings.value.lang;
-    settingsForm.name = activeGame.value.name[currentLang.value];
-    settingsForm.gamePath = activeGame.value.execution_path;
+    if (activeGame.value) {
+        settingsForm.name = activeGame.value.name[currentLang.value] || activeGame.value.name['en'] || '';
+        settingsForm.gamePath = activeGame.value.execution_path;
+        settingsForm.imageName = activeGame.value.img ? lang.value.settings_image_current : lang.value.settings_image_not_chosen;
+    }
+
     settingsForm.bgImage = null;
     settingsForm.bgImageName = settings.value.backgroundImage
         ? lang.value.settings_image_current
         : lang.value.settings_image_not_chosen;
-    settingsForm.imageName = settingsForm.image
-        ? lang.value.settings_image_current
-        : lang.value.settings_image_not_chosen;
+
     showSettings.value = true;
 }
 
-function saveSettings() {
+async function saveSettings() {
     playSfx('save');
+
+    // 更新内存中的设置状态
     settings.value.downloadPath = settingsForm.downloadPath;
-    activeGame.value.name[currentLang.value] = settingsForm.name;
     settings.value.lang = settingsForm.lang;
+
+    // 准备异步任务列表
+    const tasks: Promise<any>[] = [];
+
+    // 处理背景图片
+    if (settingsForm.bgImage) {
+        const bgTask = readFileAsDataURL(settingsForm.bgImage).then(data => {
+            settings.value.backgroundImage = data;
+        });
+        tasks.push(bgTask);
+    }
+
+    // 处理游戏设置
+    let gameUpdated = false;
     if (activeGame.value && activeGame.value.type === 'local') {
+        // 名字修改
+        if (activeGame.value.name[currentLang.value] !== settingsForm.name) {
+            activeGame.value.name[currentLang.value] = settingsForm.name;
+            gameUpdated = true;
+        }
+        // 路径修改
         if (activeGame.value.execution_path !== settingsForm.gamePath) {
             activeGame.value.playable = true;
             activeGame.value.execution_path = settingsForm.gamePath;
+            gameUpdated = true;
         }
+        // 封面图片修改
         if (settingsForm.image) {
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                activeGame.value.img = e.target?.result as string;
-                await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
-            };
-            reader.readAsDataURL(settingsForm.image);
-        } else {
-            (async () => {
-                await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
-            })();
+            const imgTask = readFileAsDataURL(settingsForm.image).then(data => {
+                if (activeGame.value) activeGame.value.img = data;
+                gameUpdated = true;
+            });
+            tasks.push(imgTask);
         }
     }
-    showSettings.value = false;
-    if (settingsForm.bgImage) {
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            settings.value.backgroundImage = e.target?.result as string;
-            await window.api.setStoreValue('settings', toRaw(settings.value));
-        };
-        reader.readAsDataURL(settingsForm.bgImage);
-    } else {
-        (async () => {
-            await window.api.setStoreValue('settings', toRaw(settings.value));
-        })();
+
+    // 等待所有图片读取完成
+    await Promise.all(tasks);
+
+    // 并行保存 Settings 和 UserGames
+    const saveTasks: Promise<any>[] = [
+        window.api.setStoreValue('settings', toRaw(settings.value))
+    ];
+
+    if (gameUpdated || tasks.length > 0) { // 如果有图片更新或游戏信息变更
+        saveTasks.push(window.api.setStoreValue('userGames', getRawData(userGames.value)));
     }
+
+    await Promise.all(saveTasks);
+    showSettings.value = false;
 }
 
 function cancelSettings() {
@@ -730,42 +772,91 @@ function handleBgFileSelect(e: Event) {
     }
 }
 
-const downloadProgress = reactive<{ [key: string]: number }>({});
 // --- Lifecycle ---
+// --- App.vue ---
+
 onMounted(async () => {
+    // 0. 初始化基础功能
     initSfx();
     if (window.api.onDownloadProgress) {
         window.api.onDownloadProgress((data: { id: string, percent: number }) => {
-            // 实时更新对应 ID 的进度值
             downloadProgress[data.id] = data.percent;
         });
     }
-    try {
-        GITHUB_GAMES.value = [];
-        isChinaIP.value = await window.api.checkIsChinaIP();
-        console.log('isChinaIP:', isChinaIP.value);
-        userGames.value = (await window.api.getStoreValue('userGames', [])) as any[];
-        const downloadPath = await window.api.getdownloadpath();
-        settings.value = (await window.api.getStoreValue('settings', { 'lang': 'en', 'downloadPath': downloadPath, 'backgroundImage': '', ignoredVersion: currentVersion })) as any;
 
-    } catch (error) {
-        console.error("Failed to load data on mount:", error);
+
+    try {
+        
+        // 1. 发起所有本地读取请求 (并行)
+        const pGames = window.api.getStoreValue('userGames', []);
+        const pSettings = window.api.getStoreValue('settings', { 
+            'lang': 'en', 
+            'downloadPath': window.api.getdownloadpath(), 
+            'backgroundImage': '', 
+            ignoredVersion: currentVersion 
+        });
+
+        // 2. 等待所有本地数据返回 (这是最快的 IO 方式)
+        const [games,  savedSettings] = await Promise.all([pGames,  pSettings]);
+
+        // 3. 立即应用数据，让界面不再白屏
+        userGames.value = games;
+        
+        // 合并设置默认值
+        settings.value = savedSettings;
+
+    } catch (e) {
+        console.error("Critical: Failed to load local data", e);
+        // 如果连本地存储都读不了，这属于严重错误，可以弹个窗或者保持空状态
     }
 
+    // ============================================================
+    // 第二阶段：后台处理网络数据 (Network Background)
+    // 不使用 await 阻塞 onMounted，让它在后台跑，不影响 UI 响应
+    // ============================================================
     (async () => {
         try {
-            const res = await fetch(isChinaIP.value ? 'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/conig.json' : 'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json', {
-                cache: 'no-store' // 告诉浏览器完全忽略缓存，直接向服务器发请求
+            // 1. 检测 IP (后端已做防崩溃处理)
+            // 即使这里慢，用户也能操作本地游戏
+            const ipCheckResult = await window.api.checkIsChinaIP();
+            isChinaIP.value = ipCheckResult; 
+            console.log('Network Status - Is China IP:', ipCheckResult);
+
+            // 2. 带有超时的 Fetch 请求
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时
+
+            const configUrl = isChinaIP.value 
+                ? 'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/config.json' 
+                : 'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json';
+
+            const res = await fetch(configUrl, {
+                cache: 'no-store',
+                signal: controller.signal // 绑定超时信号
             });
+            
+            clearTimeout(timeoutId); // 请求成功，清除定时器
+
             if (res.ok) {
                 const data = await res.json();
+                // 更新远程列表
                 GITHUB_GAMES.value = data.games;
+                
+                // 检查更新
                 if (data.newest_version !== currentVersion && data.newest_version !== settings.value.ignoredVersion) {
                     showUpdateModal.value = true;
                 }
+            } else {
+                console.warn(`Fetch returned status: ${res.status}`);
             }
-        } catch (error) {
-            console.error('Failed to refresh game list:', error);
+
+        } catch (error: any) {
+            // 网络错误静默失败，不打扰用户玩本地游戏
+            if (error.name === 'AbortError') {
+                console.warn('Network request timed out (Offline mode active)');
+            } else {
+                console.warn('Network unreachable or API error:', error);
+            }
         }
     })();
 });
@@ -853,7 +944,7 @@ onMounted(async () => {
             <div v-if="showImportTypeModal" id="import-type-overlay">
                 <div class="confirm-card" style="width: 480px;">
                     <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title
-                        }} ]
+                    }} ]
                     </div>
                     <div class="confirm-actions"
                         style="flex-direction: column; align-items: flex-start; gap: 20px; padding: 0 20px;">
@@ -861,7 +952,7 @@ onMounted(async () => {
                             lang.import_method_exe }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{
                             lang.import_method_aup
-                            }}</div>
+                        }}</div>
                         <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
                         <div class="btn" style="align-self: center;"
                             @click="showImportTypeModal = false; playSfx('cancel');">{{
@@ -978,7 +1069,7 @@ onMounted(async () => {
                                 :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
                                 @click="toggleExportSelection(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
-                                    }}</span>
+                                }}</span>
                                 {{ g.name[currentLang] }}
                             </div>
                         </div>
@@ -1012,10 +1103,10 @@ onMounted(async () => {
                         <div style="display:flex;gap:8px;align-items:center;">
                             <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
                                 lang.settings_choose_image
-                            }}</label>
+                                }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                                 settingsForm.bgImageName
-                            }}</div>
+                                }}</div>
                         </div>
                         <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />

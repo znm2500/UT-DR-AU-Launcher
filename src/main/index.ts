@@ -12,6 +12,7 @@ import Store from 'electron-store';
 import fastFolderSize from 'fast-folder-size';
 import { promisify } from 'util';
 import * as Searcher from 'ip2region-ts';
+import { publicIpv4 } from 'public-ip';
 let _7zPath = sevenBin.path7za;
 if (process.env.NODE_ENV !== 'development') {
   _7zPath = _7zPath.replace('app.asar', 'app.asar.unpacked');
@@ -30,6 +31,7 @@ async function downloadFile(url: string, destPath: string, gameId: string, webCo
     url,
     method: 'GET',
     responseType: 'stream',
+    timeout: 15000
   });
 
   const totalLength = parseInt(response.headers['content-length'] || '0', 10);
@@ -106,27 +108,37 @@ app.whenReady().then(() => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
-
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
-  ipcMain.handle('check-local-ip-region', async () => {
-    const { data } = await axios.get('https://api.ipify.org?format=json');
-    const publicIP = data.ip;
+ ipcMain.handle('check-local-ip-region', async () => {
+  try {
+    // 尝试获取公网 IP，设置超时防止卡死
+    // publicIpv4 库本身没有简单的超时参数，所以我们依靠 try-catch
+    // 如果断网，publicIpv4 会抛出错误
+    const publicIP = await publicIpv4();
 
     // 2. 查询离线库
     const searcher = Searcher.newWithFileOnly(Searcher.defaultDbFile)
     const info = await searcher.search(publicIP);
-    if(!info.region)
-      return false;
+    
+    if (!info || !info.region) return false;
+    
+    console.log(info.region, publicIP);
     const parts = info.region.split('|');
     if (parts[0] !== '中国') return false;
+    
     const specialRegions = ['香港', '澳门', '台湾'];
     if (specialRegions.includes(parts[2])) {
       return false;
     }
     return true;
-
-  });
+  } catch (error) {
+    // 关键修复：如果断网或查询失败，打印日志但不抛出错误给前端
+    // 默认返回 false，视为非大陆 IP 或离线状态
+    console.warn('Network offline or IP check failed, defaulting to global config:', error);
+    return false;
+  }
+});
 ipcMain.handle('open-external-url',async (event, url) => {
   if (url.startsWith('http://') || url.startsWith('https://')) {
     shell.openExternal(url);

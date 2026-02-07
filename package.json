@@ -31,7 +31,8 @@
     "fs-extra": "^11.3.3",
     "ip2region-ts": "^2.0.1",
     "node-7z": "^3.0.0",
-    "path-browserify": "^1.0.1"
+    "path-browserify": "^1.0.1",
+    "public-ip": "^8.0.0"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "3.0.0",
