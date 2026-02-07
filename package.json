@@ -56,6 +56,31 @@
     "asar": true,
     "asarUnpack": [
       "**/node_modules/7zip-bin/**/*"
-    ]
+    ],
+    "appId": "com.au.launcher", 
+    "productName": "AU Launcher", 
+    "win": {
+      "target": "nsis",
+      "icon": "build/icons/icon.ico"
+    },
+    "linux": {
+    "target": ["AppImage", "deb", "rpm"], 
+    "category": "Utility", 
+    "icon": "build/icons/png", 
+    "artifactName": "${productName}-v${version}-Linux-${arch}.${ext}" 
+  },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "${productName}", 
+      "artifactName": "${productName}-v${version}-Setup.${ext}" 
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icons/icon.icns"
+    },
+    "directories": {
+      "output": "release" 
+    }
   }
 }
