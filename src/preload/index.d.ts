@@ -8,7 +8,7 @@ declare global {
       launchGame: (path: string) => Promise<void>,
       downloadGame: (url: string, destDir: string, filename: string, gameId: string) => Promise<boolean>,
       getdownloadpath: () => string,
-      openFolder: () => Promise<string>
+      openFolder: () => Promise<string>,
       getStoreValue: (key: string, value?: any) => Promise<any>,
       setStoreValue: (key: string, value: any) => Promise<void>,
       deleteFolder: (path: string) => Promise<void>,
@@ -18,7 +18,8 @@ declare global {
       exportGame: (gamesToExport: any[], saveDir: string) => Promise<any>,
       checkIsChinaIP: () => Promise<boolean>,
       openExternal: (url: string) => Promise<void>,
-      onDownloadProgress: (callback: (data: { id: string, percent: number }) => void) => void
+      onDownloadProgress: (callback: (data: { id: string, percent: number }) => void) => void,
+      onZipProgress: (callback: (percent: number ) => void) => void
     }
   }
 }

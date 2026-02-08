@@ -122,10 +122,10 @@ const I18N = {
         import_aup_select_label: "Select games to import from package:",
         import_aup_confirm: "IMPORT SELECTED",
         select_export_dir: "Select directory to save files",
-        update_title: "版本更新",
-        update_msg: "检测到新版本: ",
-        update_ignore: "[ 再也不显示 ]",
-        update_download: "[ 前往下载 ]",
+        update_title: "UPDATE",
+        update_msg: "New version available: ",
+        update_ignore: "[ DO NOT SHOW AGAIN ]",
+        update_download: "[ DOWNLOAD ]",
         import_success: "Import successful!",
         network_disconnected: "Network disconnected!"
     }
@@ -209,6 +209,7 @@ const settingsForm = reactive({
 });
 
 // 导出相关状态
+const zipProgress = ref(0);
 const showExportModal = ref(false);
 const selectedExportIds = ref<Set<string>>(new Set());
 const isExporting = ref(false);
@@ -537,7 +538,7 @@ async function performAupImport() {
 
     try {
         const gamesToAdd = aupPendingGames.value.filter(g => selectedAupIds.value.has(g.id));
-
+        const userGamesMap = new Map(userGames.value.map(g => [g.id, g]));
         // 并行移动文件夹
         const moveTasks = gamesToAdd.map(async (g) => {
             const destDir = path.join(settings.value.downloadPath, g.id);
@@ -547,11 +548,11 @@ async function performAupImport() {
 
             // 成功后再推入 userGames，避免部分失败导致状态不一致
             const newG = { ...g, execution_path: newExecPath };
-            userGames.value.push(newG);
+            userGamesMap.set(g.id, newG);
         });
 
         await Promise.all(moveTasks);
-
+        userGames.value = [...userGamesMap.values()];
         // 并行清理和保存
         await Promise.all([
             window.api.deleteFolder(tmpAupDir.value),
@@ -774,12 +775,13 @@ function handleBgFileSelect(e: Event) {
 onMounted(async () => {
     // 0. 初始化基础功能
     initSfx();
-    if (window.api.onDownloadProgress) {
-        window.api.onDownloadProgress((data: { id: string, percent: number }) => {
-            downloadProgress[data.id] = data.percent;
-        });
-    }
 
+    window.api.onDownloadProgress((data: { id: string, percent: number }) => {
+        downloadProgress[data.id] = data.percent;
+    });
+    window.api.onZipProgress((percent: number) => {
+        zipProgress.value = percent;
+    })
     try {
 
         // 1. 发起所有本地读取请求 (并行)
@@ -936,7 +938,7 @@ onMounted(async () => {
             <div v-if="showImportTypeModal" id="import-type-overlay">
                 <div class="confirm-card" style="width: 480px;">
                     <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title
-                        }} ]
+                    }} ]
                     </div>
                     <div class="confirm-actions"
                         style="flex-direction: column; align-items: flex-start; gap: 20px; padding: 0 20px;">
@@ -944,7 +946,7 @@ onMounted(async () => {
                             lang.import_method_exe }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{
                             lang.import_method_aup
-                            }}</div>
+                        }}</div>
                         <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
                         <div class="btn" style="align-self: center;"
                             @click="showImportTypeModal = false; playSfx('cancel');">{{
@@ -1035,7 +1037,7 @@ onMounted(async () => {
             <div v-if="showConfirmDelete" id="confirm-overlay">
                 <div class="confirm-card">
                     <div class="confirm-body">{{ lang.confirm_del }} <span id="confirm-game-name">{{
-                            activeGame ? activeGame.name[currentLang] : '' }}</span>?</div>
+                        activeGame ? activeGame.name[currentLang] : '' }}</span>?</div>
                     <div class="confirm-actions">
                         <div class="btn enabled" @click="performDelete">{{ lang.confirm_yes }}</div>
                         <div class="btn" @click="cancelDelete">{{ lang.confirm_no }}</div>
@@ -1062,7 +1064,7 @@ onMounted(async () => {
                                 :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
                                 @click="toggleExportSelection(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
-                                    }}</span>
+                                }}</span>
                                 {{ g.name[currentLang] }}
                             </div>
                         </div>
@@ -1070,7 +1072,7 @@ onMounted(async () => {
                     <div class="settings-actions">
                         <div :class="['btn', { enabled: selectedExportIds.size > 0 && !isExporting, disabled: selectedExportIds.size === 0 || isExporting }]"
                             @click="performExport">
-                            {{ isExporting ?lang.exporting : lang.export_confirm }}
+                            {{ isExporting ? `${lang.exporting}${zipProgress}%` : lang.export_confirm }}
                         </div>
                         <div class="btn enabled" @click="cancelExport">
                             {{ lang.settings_cancel }}
@@ -1096,10 +1098,10 @@ onMounted(async () => {
                         <div style="display:flex;gap:8px;align-items:center;">
                             <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
                                 lang.settings_choose_image
-                            }}</label>
+                                }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                                 settingsForm.bgImageName
-                                }}</div>
+                            }}</div>
                         </div>
                         <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
@@ -1120,7 +1122,7 @@ onMounted(async () => {
                                     lang.settings_choose_image }}</label>
                                 <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">
                                     {{
-                                    settingsForm.imageName
+                                        settingsForm.imageName
                                     }}</div>
                             </div>
                             <input type="file" id="setting-game-image-input" @change="handleFileSelect"
@@ -1452,8 +1454,8 @@ onMounted(async () => {
     box-sizing: border-box;
     /* 核心限制：确保不溢出屏幕 */
     width: 550px;
-    max-width: 90vw;   
-    max-height: 80vh;  
+    max-width: 90vw;
+    max-height: 80vh;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -1523,8 +1525,10 @@ onMounted(async () => {
     font-size: 1.2rem;
     min-height: 60px;
     word-break: break-all;
-    flex-grow: 1;      /* 自动撑开 */
-    overflow-y: auto;  /* 内容多时显示滚动条 */
+    flex-grow: 1;
+    /* 自动撑开 */
+    overflow-y: auto;
+    /* 内容多时显示滚动条 */
     padding-right: 10px;
     margin: 10px 0;
     line-height: 1.4;
@@ -1532,7 +1536,8 @@ onMounted(async () => {
 }
 
 .error-actions {
-    flex-shrink: 0; /* 按钮区域固定在底部 */
+    flex-shrink: 0;
+    /* 按钮区域固定在底部 */
     display: flex;
     justify-content: flex-end;
     margin-top: 10px;

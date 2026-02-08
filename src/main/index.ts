@@ -234,9 +234,9 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.handle('move-folder', async (_, archivePath, destDir) => {
-    fs.move(archivePath, destDir,{overwrite: true});
+    fs.move(archivePath, destDir, { overwrite: true });
   })
-  ipcMain.handle('export-game', async (_, gamesToExport, saveDir) => {
+  ipcMain.handle('export-game', async (event, gamesToExport, saveDir) => {
     const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
 
     try {
@@ -264,15 +264,21 @@ app.whenReady().then(() => {
 
       // 2. 并行执行所有复制任务，并等待它们全部完成
       // Promise.all 会在所有任务成功时 resolve，只要有一个失败就会 reject
+      event.sender.send('export-progress', 0);
       await Promise.all(copyPromises);
 
       // 3. 执行压缩任务
       return new Promise((resolve, reject) => {
+
         const myStream = Seven.add(saveDir, path.join(tempDir, '*'), {
           $bin: _7zPath,
-          recursive: true
+          recursive: true,
+          overwrite: true,
+          $progress: true
         });
-
+        myStream.on('progress', (progressData) => {
+          event.sender.send('export-progress', progressData.percent);
+        });
         myStream.on('end', async () => {
           try {
             await fs.remove(tempDir);

@@ -28,6 +28,11 @@ api.onDownloadProgress = (callback: (data: { id: string, percent: number }) => v
     ipcRenderer.removeAllListeners('download-progress');
     ipcRenderer.on('download-progress', (_event, value) => callback(value));
 };
+api.onZipProgress = (callback: (percent: number ) => void) => {
+    // 移除之前的监听器防止重复
+    ipcRenderer.removeAllListeners('zip-progress');
+    ipcRenderer.on('zip-progress', (_event, value) => callback(value));
+};
 api.downloadGame = (url: string, destDir: string, filename: string, gameId: string) => 
     ipcRenderer.invoke('download-and-extract', url, destDir, filename, gameId);
 // Use `contextBridge` APIs to expose Electron APIs to
