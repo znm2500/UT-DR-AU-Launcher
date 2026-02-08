@@ -18,11 +18,11 @@ if (process.env.NODE_ENV !== 'development') {
   _7zPath = _7zPath.replace('app.asar', 'app.asar.unpacked');
 }
 if (process.platform === 'linux' && fs.existsSync(_7zPath)) {
-    try {
-        fs.chmodSync(_7zPath, 0o755); // 赋予可执行权限
-    } catch (err) {
-        console.error('无法自动修正 7zip 权限:', err);
-    }
+  try {
+    fs.chmodSync(_7zPath, 0o755); // 赋予可执行权限
+  } catch (err) {
+    console.error('无法自动修正 7zip 权限:', err);
+  }
 }
 const getSize = promisify(fastFolderSize);
 const store = new Store({
@@ -297,15 +297,27 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('launch-game', async (_, filePath) => {
     return new Promise((resolve, reject) => {
-      // 使用引号包裹路径，防止空格导致解析失败
-      if (process.platform === 'win32') {
-        exec(`"${filePath}"`)
-      }
-      else {
-        exec(`"wine ${filePath}"`)
-      }
+      // 统一处理带空格的路径
+      const command = process.platform === 'win32'
+        ? `"${filePath}"`
+        : `wine "${filePath}"`;
+
+      exec(command, (error, _stdout, stderr) => {
+        if (error) {
+          // 核心：这里的错误会被传递到渲染层的 catch 中
+          console.error(`启动报错: ${error.message}`);
+          return reject(error.message);
+        }
+
+        // 如果 stderr 有内容，有时是 Wine 的调试信息而非真正的崩溃
+        if (stderr) {
+          console.warn(`Wine 警告信息: ${stderr}`);
+        }
+
+        resolve('成功启动');
+      });
     })
-  })
+  });
   createWindow();
 
   app.on('activate', function () {
