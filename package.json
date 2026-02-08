@@ -95,7 +95,7 @@
       "target": ["dmg"]
     },
     "linux": {
-      "target": ["AppImage","deb","rpm"],
+      "target": ["deb","rpm"],
       "category": "Game",
       "icon": "build/icons",
       "artifactName": "${productName}-v${version}-Linux-${arch}.${ext}"
