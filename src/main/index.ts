@@ -234,7 +234,7 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.handle('move-folder', async (_, archivePath, destDir) => {
-    fs.move(archivePath, destDir);
+    fs.move(archivePath, destDir,{overwrite: true});
   })
   ipcMain.handle('export-game', async (_, gamesToExport, saveDir) => {
     const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
