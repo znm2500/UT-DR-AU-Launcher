@@ -822,7 +822,7 @@ onMounted(async () => {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时
 
-            const configUrl = 'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json';
+            const configUrl = isChinaIP.value? 'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/config.json':'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json';
 
             const res = await fetch(configUrl, {
                 cache: 'no-store',

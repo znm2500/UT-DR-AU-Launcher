@@ -7,7 +7,7 @@ export default defineConfig({
     build: {
       rollupOptions: {
         // 将 7zip-bin 和 node-7z 排除在打包之外
-        external: ['7zip-bin', 'node-7z']
+        external: ['fast-folder-size']
       }
     }
   },

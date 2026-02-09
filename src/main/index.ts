@@ -13,13 +13,11 @@ import fastFolderSize from 'fast-folder-size';
 import { promisify } from 'util';
 import * as Searcher from 'ip2region-ts';
 import { publicIpv4 } from 'public-ip';
-let _7zPath = sevenBin.path7za;
-if (process.env.NODE_ENV !== 'development') {
-  _7zPath = _7zPath.replace('app.asar', 'app.asar.unpacked');
-}
-if (process.platform === 'linux' && fs.existsSync(_7zPath)) {
+
+
+if (process.platform === 'linux' && fs.existsSync(sevenBin.path7za)) {
   try {
-    fs.chmodSync(_7zPath, 0o755); // 赋予可执行权限
+    fs.chmodSync(sevenBin.path7za, 0o755); // 赋予可执行权限
   } catch (err) {
     console.error('无法自动修正 7zip 权限:', err);
   }
@@ -61,7 +59,7 @@ async function downloadFile(url: string, destPath: string, gameId: string, webCo
 }
 async function extract7z(archivePath, outputDir) {
   const stream = Seven.extractFull(archivePath, outputDir, {
-    $bin: _7zPath
+    $bin: sevenBin.path7za
 
   });
   return new Promise<void>((resolve, reject) => {
@@ -271,7 +269,7 @@ app.whenReady().then(() => {
       return new Promise((resolve, reject) => {
 
         const myStream = Seven.add(saveDir, path.join(tempDir, '*'), {
-          $bin: _7zPath,
+          $bin: sevenBin.path7za,
           recursive: true,
           overwrite: true,
           $progress: true
