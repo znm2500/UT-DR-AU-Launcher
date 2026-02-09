@@ -58,7 +58,8 @@
     "executableName": "au-launcher",
     "asar": true,
     "asarUnpack": [
-      "**/node_modules/7zip-bin/**/*"
+      "**/node_modules/7zip-bin/**/*",
+      "**/node_modules/fast-folder-size/**/*"
     ],
     "directories": {
       "output": "release",
