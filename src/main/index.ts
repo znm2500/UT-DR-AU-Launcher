@@ -211,72 +211,89 @@ app.whenReady().then(() => {
   ipcMain.handle('get-download-path', () => {
     return getdownloadpath();
   });
-  ipcMain.handle('get-aup-config', async (_, archivePath) => {
+  ipcMain.handle('get-aup-config', async (event, archivePath) => {
     // 生成临时目录
     const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+    return new Promise((resolve, reject) => {
+      const myStream = Seven.extractFull(archivePath, tempDir, {
+        $bin: sevenBin.path7za,
+        recursive: true,
+        $progress: true
+      });
+      myStream.on('progress', (progressData) => {
+        event.sender.send('zip-progress', progressData.percent as number);
+      });
+      myStream.on('end', async () => {
+        const configPath = path.join(tempDir, 'config.json');
+        const jsonRaw = fs.readFileSync(configPath, 'utf8');
+        const games = JSON.parse(jsonRaw);
 
-    try {
-      // 1. 必须 await 这个异步解压过程
-      await extract7z(archivePath, tempDir);
+        // 3. 显式返回结果给渲染进程
+        resolve({ games, tempDir });
+      });
+      myStream.on('error', async (err) => {
+        reject(err);
+      });
+    });
 
-      // 2. 解压完成后读取文件
-      const configPath = path.join(tempDir, 'config.json');
-      const jsonRaw = fs.readFileSync(configPath, 'utf8');
-      const games = JSON.parse(jsonRaw);
-
-      // 3. 显式返回结果给渲染进程
-      return { games, tempDir };
-    } catch (error) {
-      console.error('解析 AUP 失败:', error);
-      throw error; // 抛出错误，渲染进程的 try-catch 就能捕获到
-    }
   });
   ipcMain.handle('move-folder', async (_, archivePath, destDir) => {
-    fs.move(archivePath, destDir, { overwrite: true });
+    fs.copy(archivePath, destDir, { overwrite: true });
   })
   ipcMain.handle('export-game', async (event, gamesToExport, saveDir) => {
     const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
+
+    // 定义权重
+    const COPY_WEIGHT = 0.3;
+    const ZIP_WEIGHT = 0.7;
 
     try {
       await fs.ensureDir(tempDir);
       await fs.writeJson(path.join(tempDir, 'config.json'), gamesToExport);
 
-      // 1. 构造任务数组 (不使用 await，先创建 Promise)
+      // --- 1. 复制阶段 ---
+      let completedCopies = 0;
+      const totalGames = gamesToExport.length;
+
       const copyPromises = gamesToExport.map(async (metadata) => {
         const gameRoot = path.join(metadata.execution_path, '..');
         const gameDestDir = path.join(tempDir, metadata.id);
-
-        // 确保目标子目录存在
         await fs.ensureDir(gameDestDir);
 
         const fileSize: any = await getSize(gameRoot);
 
-        if (fileSize < 2147483648) { // 2GB
-          // 使用异步版本 fs.copy 而不是 copySync
-          return fs.copy(gameRoot, gameDestDir);
+        if (fileSize < 2147483648) {
+          await fs.copy(gameRoot, gameDestDir);
         } else {
           const destExePath = path.join(gameDestDir, path.basename(metadata.execution_path));
-          return fs.copyFile(metadata.execution_path, destExePath);
+          await fs.copyFile(metadata.execution_path, destExePath);
         }
+
+        // 每次完成一个游戏，更新进度
+        completedCopies++;
+        const copyProgress = (completedCopies / totalGames) * 100;
+        // 发送加权后的进度：0% -> 30%
+        event.sender.send('zip-progress', Math.round(copyProgress * COPY_WEIGHT));
       });
 
-      // 2. 并行执行所有复制任务，并等待它们全部完成
-      // Promise.all 会在所有任务成功时 resolve，只要有一个失败就会 reject
-      event.sender.send('export-progress', 0);
       await Promise.all(copyPromises);
 
-      // 3. 执行压缩任务
+      // --- 2. 压缩阶段 ---
       return new Promise((resolve, reject) => {
-
         const myStream = Seven.add(saveDir, path.join(tempDir, '*'), {
           $bin: sevenBin.path7za,
           recursive: true,
-          overwrite: true,
           $progress: true
         });
+
         myStream.on('progress', (progressData) => {
-          event.sender.send('export-progress', progressData.percent);
+          // 压缩进度从 0-100 映射到 30%-100%
+          // 计算公式：基础进度(30) + (当前压缩百分比 * 0.7)
+          const totalProgress = (COPY_WEIGHT * 100) + (progressData.percent * ZIP_WEIGHT);
+
+          event.sender.send('zip-progress', Math.round(totalProgress));
         });
+
         myStream.on('end', async () => {
           try {
             await fs.remove(tempDir);
@@ -300,7 +317,10 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.handle('launch-game', async (_, filePath) => {
-    return new Promise((resolve, reject) => {
+    if (!fs.existsSync(filePath)) {
+      throw new Error('File not found:' + filePath);
+    }
+    return new Promise((resolve, _reject) => {
       // 统一处理带空格的路径
       const command = process.platform === 'win32'
         ? `"${filePath}"`
@@ -310,7 +330,7 @@ app.whenReady().then(() => {
         if (error) {
           // 核心：这里的错误会被传递到渲染层的 catch 中
           console.error(`启动报错: ${error.message}`);
-          return reject(error.message);
+
         }
 
         // 如果 stderr 有内容，有时是 Wine 的调试信息而非真正的崩溃

@@ -7,6 +7,7 @@ import confirmWav from './assets/sfx/confirm.wav'
 import cancelWav from './assets/sfx/cancel.wav'
 import switchWav from './assets/sfx/switch.wav'
 import saveWav from './assets/sfx/save.wav'
+import { is } from '@electron-toolkit/utils';
 const availableLanguages = [
     { code: 'en', label: 'English' },
     { code: 'zh', label: '中文' }
@@ -56,6 +57,7 @@ const I18N = {
         export_select_label: "请选择要导出的游戏 (可多选):",
         export_confirm: "导出选中项",
         exporting: "正在导出...",
+        importing: "正在导入...",
         export_success: "所有导出任务已完成!",
         success: "成功",
         import_title: "导入游戏",
@@ -69,7 +71,9 @@ const I18N = {
         update_msg: "检测到新版本: ",
         update_ignore: "[ 再也不显示 ]",
         update_download: "[ 前往下载 ]",
-        network_disconnected: "网络已断开!"
+        network_disconnected: "网络已断开!",
+        parsing_title: "解析中...",
+        parsing_msg: "正在解压资源，请稍候..."
 
     },
     en: {
@@ -114,6 +118,7 @@ const I18N = {
         export_select_label: "Select games to export (Multi-select):",
         export_confirm: "Export Selected",
         exporting: "Exporting...",
+        importing: "Importing...",
         export_success: "All exports finished!",
         success: "Success",
         import_title: "IMPORT GAME",
@@ -127,7 +132,9 @@ const I18N = {
         update_ignore: "[ DO NOT SHOW AGAIN ]",
         update_download: "[ DOWNLOAD ]",
         import_success: "Import successful!",
-        network_disconnected: "Network disconnected!"
+        network_disconnected: "Network disconnected!",
+        parsing_title: "PARSING...",
+        parsing_msg: "Extracting resources, please wait..."
     }
 };
 
@@ -196,6 +203,7 @@ const selectedIndex = ref(0);
 const visibleCount = ref(5);
 const downloadIdSet = new Set();
 const showConfirmDelete = ref(false);
+const isParsingAup = ref(false);
 const showSettings = ref(false);
 const settingsForm = reactive({
     name: '',
@@ -207,7 +215,7 @@ const settingsForm = reactive({
     gamePath: '',
     lang: 'en'
 });
-
+const isImporting = ref(false);
 // 导出相关状态
 const zipProgress = ref(0);
 const showExportModal = ref(false);
@@ -507,15 +515,32 @@ async function importFromAup() {
         if (!filePath) return;
 
         playSfx('confirm');
+
+        // 1. 开始解析前：重置进度，显示解析弹窗
+        zipProgress.value = 0;
+        isParsingAup.value = true;
+
+        // 2. 调用后端解析 (这是一个耗时操作)
+        // 注意：确保你的主进程 parseAup 函数在解压时会发送 'export-progress' 事件
         const aupdata = await window.api.parseAup(filePath);
+
+        // 3. 解析完成：关闭解析弹窗
+        isParsingAup.value = false;
+        zipProgress.value = 0;
+        // 4. 处理数据并打开选择游戏的窗口
         const games = aupdata.games;
         tmpAupDir.value = aupdata.tempDir;
         if (games && games.length > 0) {
             aupPendingGames.value = games;
             selectedAupIds.value.clear();
-            showAupImportModal.value = true;
+            showAupImportModal.value = true; // 打开选择列表
+        } else {
+            // 如果包里没有游戏，给个提示
+            triggerDialog("No games found in this package.", lang.value.error);
+            window.api.deleteFolder(tmpAupDir.value); // 清理临时目录
         }
     } catch (err: any) {
+        isParsingAup.value = false; // 出错也要确保关掉弹窗
         triggerDialog(`${err}`, lang.value.error);
     }
 }
@@ -539,26 +564,39 @@ async function performAupImport() {
     try {
         const gamesToAdd = aupPendingGames.value.filter(g => selectedAupIds.value.has(g.id));
         const userGamesMap = new Map(userGames.value.map(g => [g.id, g]));
+        let finishedTasks = 0;
+        zipProgress.value = 0;
+        isImporting.value = true;
         // 并行移动文件夹
         const moveTasks = gamesToAdd.map(async (g) => {
             const destDir = path.join(settings.value.downloadPath, g.id);
             const newExecPath = path.join(destDir, path.basename(g.execution_path.replace(/\\/g, '/')));
-            // 重要：先执行文件系统操作
+
             await window.api.moveFolder(path.join(tmpAupDir.value, g.id), destDir);
 
-            // 成功后再推入 userGames，避免部分失败导致状态不一致
             const newG = { ...g, execution_path: newExecPath };
             userGamesMap.set(g.id, newG);
+            zipProgress.value = Math.round(++finishedTasks / gamesToAdd.length*100);
         });
 
         await Promise.all(moveTasks);
-        userGames.value = [...userGamesMap.values()];
-        // 并行清理和保存
-        await Promise.all([
-            window.api.deleteFolder(tmpAupDir.value),
-            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)))
-        ]);
 
+        userGames.value = [...userGamesMap.values()];
+
+        const delayDelete = (path) => new Promise((resolve) => {
+            setTimeout(async () => {
+                await window.api.deleteFolder(path);
+                resolve(true);
+            }, 1000);
+        });
+
+        // 并行执行存储和清理
+        await Promise.all([
+            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value))),
+            delayDelete(tmpAupDir.value)
+        ]);
+        zipProgress.value = 0;
+        isImporting.value = false;
         triggerDialog(lang.value.import_success, lang.value.success, 'save');
     } catch (err: any) {
         console.error("导入失败:", err);
@@ -781,6 +819,7 @@ onMounted(async () => {
     });
     window.api.onZipProgress((percent: number) => {
         zipProgress.value = percent;
+
     })
     try {
 
@@ -822,7 +861,7 @@ onMounted(async () => {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时
 
-            const configUrl = isChinaIP.value? 'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/config.json':'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json';
+            const configUrl = isChinaIP.value ? 'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/config.json' : 'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json';
 
             const res = await fetch(configUrl, {
                 cache: 'no-store',
@@ -955,7 +994,30 @@ onMounted(async () => {
                 </div>
             </div>
         </Transition>
+        <Transition name="fade">
+            <div v-if="isParsingAup" id="parsing-overlay">
+                <div class="confirm-card" style="width: 450px; text-align: center;">
+                    <div class="settings-title" style="color: var(--highlight-color); margin-bottom: 20px;">
+                        [ {{ lang.parsing_title }} ]
+                    </div>
 
+                    <div class="confirm-body"
+                        style="display: flex; flex-direction: column; align-items: center; gap: 10px;">
+                        <div style="font-size: 1.5rem;">
+                            {{ lang.import_method_aup }}
+                        </div>
+
+                        <div style="font-size: 3rem; color: white; font-family: 'fzxs';">
+                            {{ zipProgress }}%
+                        </div>
+
+                        <div style="font-size: 1rem; color: #777;">
+                            {{ lang.parsing_msg }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
         <Transition name="fade">
             <div v-if="showExeImportModal" id="exe-import-overlay">
                 <div class="settings-card">
@@ -1020,9 +1082,9 @@ onMounted(async () => {
                         </div>
                     </div>
                     <div class="settings-actions">
-                        <div :class="['btn', { enabled: selectedAupIds.size > 0, disabled: selectedAupIds.size === 0 }]"
+                        <div :class="['btn', { enabled: selectedAupIds.size > 0 && !isImporting, disabled: selectedAupIds.size === 0 || isImporting }]"
                             @click="performAupImport">
-                            {{ lang.import_aup_confirm }}
+                            {{ isImporting? `${lang.importing}${zipProgress}%` : lang.import_aup_confirm }}
                         </div>
                         <div class="btn enabled" @click="cancelAupImport">{{
                             }}
@@ -1435,7 +1497,8 @@ onMounted(async () => {
 #import-type-overlay,
 #aup-import-overlay,
 #exe-import-overlay,
-#update-overlay {
+#update-overlay,
+#parsing-overlay {
     position: fixed;
     inset: 0;
     display: flex;
