@@ -7,7 +7,7 @@ import confirmWav from './assets/sfx/confirm.wav'
 import cancelWav from './assets/sfx/cancel.wav'
 import switchWav from './assets/sfx/switch.wav'
 import saveWav from './assets/sfx/save.wav'
-import { is } from '@electron-toolkit/utils';
+
 const availableLanguages = [
     { code: 'en', label: 'English' },
     { code: 'zh', label: '中文' }
@@ -182,7 +182,7 @@ const force_render_key = ref(0);
 const searchInput = ref('');
 const GITHUB_GAMES = ref<any[]>([]);
 const userGames = ref<any[]>([]);
-const currentVersion = '1.0.0';
+const currentVersion = '0.0.0';
 const latestVersion = ref('');
 const settings = ref({
     downloadPath: '',
