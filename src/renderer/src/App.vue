@@ -10,12 +10,13 @@ import saveWav from './assets/sfx/save.wav'
 
 const availableLanguages = [
     { code: 'en', label: 'English' },
-    { code: 'zh', label: '中文' }
+    { code: 'zh_Hans', label: '中文（简体）' },
+    { code: 'zh_Hant', label: '中文（繁體）' }
 ];
 
 // --- I18N (保持不变) ---
 const I18N = {
-    zh: {
+    zh_Hans: {
         ok: "确定",
         search: "搜索AU...",
         import: "[ 导入 ]",
@@ -74,7 +75,66 @@ const I18N = {
         network_disconnected: "网络已断开!",
         parsing_title: "解析中...",
         parsing_msg: "正在解压资源，请稍候..."
-
+    },
+    zh_Hant: {
+        ok: "確定",
+        search: "搜尋AU...",
+        import: "[ 匯入 ]",
+        export: "[ 匯出 ]",
+        delete: "[ 刪除 ]",
+        play: "[ 遊玩 ]",
+        download: "[ 前往下載 ]",
+        installed: "已就緒",
+        error: "錯誤",
+        export_select_all: "[ 全選 / 取消全選 ]",
+        to_download: "未下載",
+        downloading: "下載中",
+        settings: "[ 設定 ]",
+        settings_title: "設定",
+        settings_lang_label: "語言",
+        settings_import_name_label: "本地遊戲名稱",
+        settings_import_image_label: "本地遊戲圖片",
+        settings_bg_image_label: "啟動器背景圖片",
+        settings_choose_image: "選擇圖片",
+        settings_image_not_chosen: "(未選擇)",
+        settings_image_current: "(當前圖片)",
+        settings_download_path_label: "遊戲下載路徑",
+        settings_game_path_label: "遊戲可執行檔案路徑",
+        settings_browse: "瀏覽",
+        settings_save: "儲存",
+        settings_cancel: "取消",
+        confirm_del: "確定從列表中刪除",
+        confirm_yes: "是",
+        confirm_no: "否",
+        prompt_import_name: "遊戲名稱:",
+        alert_launching: "啟動中",
+        alert_opening_url: "正在開啟下載頁面",
+        placeholder_game_name: "遊戲名稱",
+        placeholder_download_path: "/path/to/downloads",
+        load_more: "↓ 載入更多",
+        name_exe: "執行程式",
+        name_aup: "同人包",
+        export_title: "匯出遊戲 (.aup)",
+        export_select_label: "請選擇要匯出的遊戲 (可多選):",
+        export_confirm: "匯出選中項",
+        exporting: "正在匯出...",
+        importing: "正在匯入...",
+        export_success: "所有匯出任務已完成!",
+        success: "成功",
+        import_title: "匯入遊戲",
+        import_method_exe: "> 匯入本地執行程式 (.exe)",
+        import_method_aup: "> 匯入同人包 (.aup)",
+        import_aup_select_label: "請選擇要從包中匯入的遊戲:",
+        import_aup_confirm: "開始匯入",
+        select_export_dir: "請選擇匯出檔案的儲存目錄",
+        import_success: "匯入成功!",
+        update_title: "版本更新",
+        update_msg: "偵測到新版本: ",
+        update_ignore: "[ 再也不顯示 ]",
+        update_download: "[ 前往下載 ]",
+        network_disconnected: "網路已斷開!",
+        parsing_title: "解析中...",
+        parsing_msg: "正在提取資源，請稍候..."
     },
     en: {
         ok: "OK",
@@ -276,7 +336,11 @@ const filteredList = computed(() => {
     return fullList.value.filter(g => {
         // 优化搜索：优先匹配名称，减少对其他字段的遍历
         if (g.name && typeof g.name === 'object') {
-            if (g.name.zh?.toLowerCase().includes(query) || g.name.en?.toLowerCase().includes(query)) return true;
+            for (const lang of Object.keys(I18N)) {
+                if (g.name[lang]?.toLowerCase().includes(query)) {
+                    return true;
+                }
+            }
         }
         // 只有名字没匹配到，才去遍历所有属性 (兜底)
         for (const k of Object.keys(g)) {
@@ -476,9 +540,13 @@ async function confirmExeImport() {
     if (!exeImportForm.name || !exeImportForm.path) return;
     playSfx('save');
 
+    const newGameNames: { [key: string]: string } = {};
+    for (const lang of Object.keys(I18N)) {
+        newGameNames[lang] = exeImportForm.name;
+    }
     const newGame = {
         id: crypto.randomUUID(),
-        name: { en: exeImportForm.name, zh: exeImportForm.name },
+        name: newGameNames,
         type: 'local',
         playable: true,
         execution_path: exeImportForm.path,
