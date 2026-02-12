@@ -10,12 +10,13 @@ import saveWav from './assets/sfx/save.wav'
 import SparkMD5 from 'spark-md5';
 const availableLanguages = [
     { code: 'en', label: 'English' },
-    { code: 'zh', label: '中文' }
+    { code: 'zh_Hans', label: '中文（简体）' },
+    { code: 'zh_Hant', label: '中文（繁體）' }
 ];
 
 // --- I18N (保持不变) ---
 const I18N = {
-    zh: {
+    zh_Hans: {
         cyf_download_success: "CYF下载完成!",
         title_cyf_download: "CYF下载",
         cyf_downloading: "该游戏为CYF平台游戏，正在为您下载CYF...",
@@ -103,6 +104,96 @@ const I18N = {
         cyf_import_invalid_name: "CYF模组含有非法字符!",
         group_all: "全部",
         group_hot: "最热",
+        group_new: "最新"
+    },
+    zh_Hant: {
+        cyf_download_success: "CYF下載完成!",
+        title_cyf_download: "CYF下載",
+        cyf_downloading: "該遊戲為CYF平臺遊戲，正在為您下載CYF...",
+        ok: "確定",
+        submit: "提交",
+        submitting: "提交中...",
+        submit_title: "上載遊戲申請",
+        submit_success: "提交成功!",
+        submit_failed: "提交失敗!",
+        game_name: "遊戲名稱",
+        download_link: "下載連結",
+        cover_path: "封面圖片",
+        select_file: "選擇圖片",
+        upload: "上載",
+        search: "搜尋AU...",
+        import: "[ 匯入 ]",
+        export: "[ 匯出 ]",
+        delete: "[ 刪除 ]",
+        play: "[ 遊玩 ]",
+        download: "[ 前往下載 ]",
+        installed: "已就緒",
+        error: "錯誤",
+        export_select_all: "[ 全選 / 取消全選 ]",
+        to_download: "未下載",
+        downloading: "下載中",
+        settings: "[ 設定 ]",
+        settings_title: "設定",
+        settings_lang_label: "語言",
+        settings_import_name_label: "本地遊戲名稱",
+        settings_import_image_label: "本地遊戲圖片",
+        settings_bg_image_label: "啟動器背景圖片",
+        settings_choose_image: "選擇圖片",
+        settings_image_not_chosen: "(未選擇)",
+        settings_image_current: "(當前圖片)",
+        settings_download_path_label: "遊戲下載路徑",
+        settings_game_path_label: "遊戲可執行檔案路徑",
+        settings_browse: "瀏覽",
+        settings_save: "儲存",
+        settings_cancel: "取消",
+        confirm_del: "確定從列表中刪除",
+        confirm_yes: "是",
+        confirm_no: "否",
+        prompt_import_name: "遊戲名稱:",
+        alert_launching: "啟動中",
+        alert_opening_url: "正在開啟下載頁面",
+        placeholder_game_name: "遊戲名稱",
+        placeholder_download_path: "/path/to/downloads",
+        load_more: "↓ 載入更多",
+        name_exe: "執行程式",
+        name_aup: "同人包",
+        export_title: "匯出遊戲 (.aup)",
+        export_select_label: "請選擇要匯出的遊戲 (可多選):",
+        export_confirm: "匯出選中項",
+        exporting: "正在匯出...",
+        importing: "正在匯入...",
+        export_success: "所有匯出任務已完成!",
+        success: "成功",
+        import_title: "匯入遊戲",
+        import_method_exe: "> 匯入本地執行程式 (.exe)",
+        import_method_aup: "> 匯入同人包 (.aup)",
+        import_aup_select_label: "請選擇要從包中匯入的遊戲:",
+        import_aup_confirm: "開始匯入",
+        select_export_dir: "請選擇匯出檔案的儲存目錄",
+        import_success: "匯入成功!",
+        update_title: "版本更新",
+        update_msg: "偵測到新版本: ",
+        update_ignore: "[ 再也不顯示 ]",
+        update_download: "[ 前往下載 ]",
+        network_disconnected: "網路已斷開!",
+        parsing_title: "解析中...",
+        parsing_msg: "正在提取資源，請稍候...",
+        settings_import_author_label: "作者",
+        settings_import_engine_label: "引擎",
+        placeholder_author: "遊戲作者名稱",
+        playing: "遊玩中",
+        placeholder_engine: "遊戲製作引擎",
+        announcement_title: "重要公告",
+        i_know: "我已知曉",
+        settings_music_dir_label: "音樂資料夾路徑",
+        submit_description: "說明",
+        placeholder_description: "請輸入遊戲說明或補充資訊息...",
+        music: "音樂",
+        no_cyf_mod_found: '未找到相應CYF模組!',
+        import_method_cyf: "> 匯入CYF模組 (Folder)",
+        cyf_import_invalid_name: "CYF模組含有非法字元!",
+        group_all: "全部",
+        group_hot: "最熱",
         group_new: "最新"
     },
     en: {
@@ -262,7 +353,7 @@ const settings = ref({
     musicDirectory: ''
 });
 const showAnnouncement = ref(false);
-const announcementData = ref({ en: '', zh: '' });
+const announcementData = ref({ en: '', zh_Hans: '', zh_Hant: '' });
 const showUpdateModal = ref(false);
 const showExeImportModal = ref(false);
 const showDownloadModal = ref(false);
@@ -962,14 +1053,19 @@ function handleExeImportImageSelect(e: Event) {
 async function confirmExeImport() {
     if (!exeImportForm.name || !exeImportForm.path) return;
 
+    const newGameNames: { [key: string]: string } = {};
+    for (const lang of Object.keys(I18N)) {
+        newGameNames[lang] = exeImportForm.name;
+    }
     const newGame = {
         id: `local${crypto.randomUUID()}`,
-        name: { en: exeImportForm.name, zh: exeImportForm.name },
+        name: newGameNames,
         type: 'local',
         playable: true,
         author: {
-            zh: exeImportForm.author,
-            en: exeImportForm.author
+            en: exeImportForm.author,
+            zh_Hans: exeImportForm.author,
+            zh_Hant: exeImportForm.author
         },
         engine: exeImportForm.engine,
         execution_path: exeImportForm.path,
@@ -1002,12 +1098,13 @@ async function confirmCyfImport() {
 
     const newGame = {
         id: `local${crypto.randomUUID()}`,
-        name: { en: exeImportForm.name, zh: exeImportForm.name },
+        name: { en: exeImportForm.name, zh_Hans: exeImportForm.name, zh_Hant: exeImportForm.name },
         type: 'local',
         playable: true,
         author: {
-            zh: exeImportForm.author,
-            en: exeImportForm.author
+            en: exeImportForm.author,
+            zh_Hans: exeImportForm.author,
+            zh_Hant: exeImportForm.author
         },
         engine: exeImportForm.engine,
         execution_path: path.normalize(path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe")),
@@ -1631,7 +1728,7 @@ onMounted(async () => {
 
             // 如果服务器公告索引不为 0 且 与本地保存的不一致，则显示弹窗
             if (data.announcement?.en !== lastReadIndex && data.announcement?.en) {
-                announcementData.value = data.announcement || { en: '', zh: '' };
+                announcementData.value = data.announcement || { en: '', zh_Hans: '', zh_Hant: '' };
                 showAnnouncement.value = true;
                 announcementIndex = data.announcement?.en;
             }
