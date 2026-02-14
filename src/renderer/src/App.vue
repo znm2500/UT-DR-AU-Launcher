@@ -73,8 +73,12 @@ const I18N = {
         update_download: "[ 前往下载 ]",
         network_disconnected: "网络已断开!",
         parsing_title: "解析中...",
-        parsing_msg: "正在解压资源，请稍候..."
-
+        parsing_msg: "正在解压资源，请稍候...",
+        settings_import_author_label: "作者",
+        settings_import_engine_label: "引擎",
+        placeholder_author: "游戏作者名称",
+        playing: "游玩中",
+        placeholder_engine: "游戏制作引擎"
     },
     en: {
         ok: "OK",
@@ -134,6 +138,11 @@ const I18N = {
         import_success: "Import successful!",
         network_disconnected: "Network disconnected!",
         parsing_title: "PARSING...",
+        settings_import_author_label: "Author",
+        settings_import_engine_label: "Engine",
+        placeholder_author: "Game author name",
+        placeholder_engine: "Game engine",
+        playing: "PLAYING",
         parsing_msg: "Extracting resources, please wait..."
     }
 };
@@ -182,8 +191,9 @@ const force_render_key = ref(0);
 const searchInput = ref('');
 const GITHUB_GAMES = ref<any[]>([]);
 const userGames = ref<any[]>([]);
-const currentVersion = '0.0.0';
+const currentVersion = '1.0.0';
 const latestVersion = ref('');
+const updateLog = ref<Record<string, string>>({});
 const settings = ref({
     downloadPath: '',
     backgroundImage: '',
@@ -195,6 +205,8 @@ const showExeImportModal = ref(false);
 const exeImportForm = reactive({
     name: '',
     path: '',
+    author: '',
+    engine: '',
     image: null as File | null,
     imageName: ''
 });
@@ -207,6 +219,8 @@ const isParsingAup = ref(false);
 const showSettings = ref(false);
 const settingsForm = reactive({
     name: '',
+    author: '',
+    engine: '',
     image: null as File | null,
     imageName: '',
     bgImage: null as File | null,
@@ -271,19 +285,27 @@ const fullList = computed(() => {
 });
 
 const filteredList = computed(() => {
-    const query = searchInput.value.toLowerCase().trim(); // 增加 trim
-    if (!query) return fullList.value;
+    const query = searchInput.value.toLowerCase();
+    if (!query.trim()) return fullList.value;
+
     return fullList.value.filter(g => {
-        // 优化搜索：优先匹配名称，减少对其他字段的遍历
+        // 1. 匹配名称 (多语言)
         if (g.name && typeof g.name === 'object') {
             if (g.name.zh?.toLowerCase().includes(query) || g.name.en?.toLowerCase().includes(query)) return true;
         }
-        // 只有名字没匹配到，才去遍历所有属性 (兜底)
+
+        // 2. 匹配作者 (Author)
+        if (g.author && g.author.toLowerCase().includes(query)) return true;
+
+        // 3. 匹配引擎 (Engine)
+        if (g.engine && g.engine.toLowerCase().includes(query)) return true;
+
+        // 4. 原有的兜底逻辑 (遍历其他字符串字段)
         for (const k of Object.keys(g)) {
-            // 跳过大对象或无关字段
-            if (k === 'img' || k === 'desc') continue;
+            if (k === 'img' || k === 'desc' || k === 'name' || k === 'author' || k === 'engine') continue;
             if (typeof g[k] === 'string' && g[k].toLowerCase().includes(query)) return true;
         }
+
         return false;
     });
 });
@@ -355,30 +377,28 @@ watch(searchInput, () => {
 });
 
 async function handleAction() {
-    if ((!activeGame.value) || (activeGame.value.type === 'local' && !activeGame.value.playable) || (activeGame.value.type === 'downloading')) return;
+    if ((!activeGame.value) || (activeGame.value.type === 'local' && !activeGame.value.playable) || (activeGame.value.type === 'downloading') || (activeGame.value.type === 'playing')) return;
 
     playSfx('confirm');
 
     if (activeGame.value.type === 'local') {
         try {
-            window.api.launchGame(activeGame.value.execution_path).catch(err => {
-                triggerDialog(`${err}`, lang.value.error);
-                activeGame.value.playable = false;
-                window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
-            });
-
             const gameId = activeGame.value.id;
             const indexInUserGames = userGames.value.findIndex(g => g.id === gameId);
-
+            const game = activeGame.value;
+            const originalType = game.type;
             if (indexInUserGames !== -1) {
                 const [movedGame] = userGames.value.splice(indexInUserGames, 1);
                 userGames.value.unshift(movedGame);
-
-                forceRender();
                 window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value))).catch(console.error);
-
                 selectedIndex.value = 0;
             }
+            game.type = 'playing';
+            forceRender();
+            await window.api.launchGame(game.execution_path);
+            game.type = originalType;
+            forceRender();
+          
         } catch (err: any) {
             triggerDialog(`${err}`, lang.value.error);
             activeGame.value.playable = false;
@@ -477,10 +497,15 @@ async function confirmExeImport() {
     playSfx('save');
 
     const newGame = {
-        id: crypto.randomUUID(),
+        id: `local${crypto.randomUUID()}`,
         name: { en: exeImportForm.name, zh: exeImportForm.name },
         type: 'local',
         playable: true,
+        author: {
+            zh: exeImportForm.author || exeImportForm.author,
+            en: exeImportForm.author || exeImportForm.author
+        },
+        engine: exeImportForm.engine || '',
         execution_path: exeImportForm.path,
         img: defaultCover
     };
@@ -493,7 +518,12 @@ async function confirmExeImport() {
 
         userGames.value.push(newGame);
         await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
-
+        exeImportForm.name = '';
+        exeImportForm.author = '';
+        exeImportForm.engine = '';
+        exeImportForm.path = '';
+        exeImportForm.image = null;
+        exeImportForm.imageName = lang.value.settings_image_not_chosen;
         showExeImportModal.value = false;
         selectedIndex.value = filteredList.value.findIndex(g => g.id === newGame.id);
         triggerDialog(lang.value.success, lang.value.success, 'save');
@@ -576,7 +606,7 @@ async function performAupImport() {
 
             const newG = { ...g, execution_path: newExecPath };
             userGamesMap.set(g.id, newG);
-            zipProgress.value = Math.round(++finishedTasks / gamesToAdd.length*100);
+            zipProgress.value = Math.round(++finishedTasks / gamesToAdd.length * 100);
         });
 
         await Promise.all(moveTasks);
@@ -715,7 +745,10 @@ function openSettings() {
         settingsForm.gamePath = activeGame.value.execution_path;
         settingsForm.imageName = activeGame.value.img ? lang.value.settings_image_current : lang.value.settings_image_not_chosen;
     }
-
+    if (activeGame.value && activeGame.value.id.includes('local')) {
+        settingsForm.author = activeGame.value.author || '';
+        settingsForm.engine = activeGame.value.engine || '';
+    }
     settingsForm.bgImage = null;
     settingsForm.bgImageName = settings.value.backgroundImage
         ? lang.value.settings_image_current
@@ -727,9 +760,7 @@ function openSettings() {
 async function saveSettings() {
     playSfx('save');
 
-    // 更新内存中的设置状态
-    settings.value.downloadPath = settingsForm.downloadPath;
-    settings.value.lang = settingsForm.lang;
+
 
     // 准备异步任务列表
     const tasks: Promise<any>[] = [];
@@ -744,28 +775,46 @@ async function saveSettings() {
 
     // 处理游戏设置
     let gameUpdated = false;
-    if (activeGame.value && activeGame.value.type === 'local') {
-        // 名字修改
-        if (activeGame.value.name[currentLang.value] !== settingsForm.name) {
-            activeGame.value.name[currentLang.value] = settingsForm.name;
-            gameUpdated = true;
-        }
-        // 路径修改
-        if (activeGame.value.execution_path !== settingsForm.gamePath) {
-            activeGame.value.playable = true;
-            activeGame.value.execution_path = settingsForm.gamePath;
-            gameUpdated = true;
-        }
-        // 封面图片修改
-        if (settingsForm.image) {
-            const imgTask = readFileAsDataURL(settingsForm.image).then(data => {
-                if (activeGame.value) activeGame.value.img = data;
+    if (activeGame.value) {
+        if (activeGame.value.type === 'local') {
+            // 名字修改
+            if (activeGame.value.name[currentLang.value] !== settingsForm.name) {
+                console.log(currentLang.value);
+                activeGame.value.name[currentLang.value] = settingsForm.name;
                 gameUpdated = true;
-            });
-            tasks.push(imgTask);
+            }
+            // 路径修改
+            if (activeGame.value.execution_path !== settingsForm.gamePath) {
+                activeGame.value.playable = true;
+                activeGame.value.execution_path = settingsForm.gamePath;
+                gameUpdated = true;
+            }
+            // 封面图片修改
+            if (settingsForm.image) {
+                const imgTask = readFileAsDataURL(settingsForm.image).then(data => {
+                    if (activeGame.value) activeGame.value.img = data;
+                    gameUpdated = true;
+                });
+                tasks.push(imgTask);
+            }
+            if (activeGame.value.id.includes('local')) {
+                // 作者修改
+                if (activeGame.value.author.name[currentLang.value] !== settingsForm.author) {
+                    activeGame.value.author.name[currentLang.value] = settingsForm.author;
+                    gameUpdated = true;
+                }
+                // 引擎修改
+                if (activeGame.value.engine !== settingsForm.engine) {
+                    activeGame.value.engine = settingsForm.engine;
+                    gameUpdated = true;
+                }
+            }
         }
-    }
 
+    }
+    // 更新内存中的设置状态
+    settings.value.downloadPath = settingsForm.downloadPath;
+    settings.value.lang = settingsForm.lang;
     // 等待所有图片读取完成
     await Promise.all(tasks);
 
@@ -872,11 +921,10 @@ onMounted(async () => {
 
             if (res.ok) {
                 const data = await res.json();
-                // 更新远程列表
                 GITHUB_GAMES.value = data.games;
-
-                // 检查更新
                 if (data.newest_version !== currentVersion && data.newest_version !== settings.value.ignoredVersion) {
+                    latestVersion.value = data.newest_version;
+                    updateLog.value = data.update_log || {};
                     showUpdateModal.value = true;
                 }
             } else {
@@ -909,19 +957,26 @@ onMounted(async () => {
                 <div class="card-left">
                     <img :src="soulIcon" class="soul-icon" draggable="false" />
                     <div class="info-box">
-                        <div class="name">{{ game.name[currentLang] }}</div>
-                        <div :key="force_render_key"
-                            :class="['status', game.type === 'local' ? (game.playable ? 'tag-installed' : 'tag-error') : (game.type === 'downloading' ? 'tag-downloading' : 'tag-download')]">
-                            <template v-if="game.type === 'downloading'">
-                                {{ lang.downloading }}
-                                <span v-if="downloadProgress[game.id] !== undefined">
-                                    {{ downloadProgress[game.id] }}%
-                                </span>
+                        <div class="name">{{ game.name[currentLang] || game.name['en'] }}</div>
+                        <div class="game-meta" style="font-size: 0.9rem; color: #bbb; margin-bottom: 8px;">
+                            <span v-if="game.author">by {{ game.author[currentLang] || game.author['en'] }}</span>
+                            <span v-if="game.engine" style="margin-left: 10px; color: #888;">[{{ game.engine }}]</span>
+                        </div>
+                        <div :key="force_render_key" :class="['status',
+                            game.type === 'local' ? (game.playable ? 'tag-installed' : 'tag-error') :
+                                game.type === 'playing' ? 'tag-playing' :  /* 新增：游玩中样式类 */
+                                    (game.type === 'downloading' ? 'tag-downloading' : 'tag-download')]">
+                            <template v-if="game.type === 'playing'">
+                                {{ lang.playing }}
                             </template>
-
+                            <template v-else-if="game.type === 'local'">
+                                {{ game.playable ? lang.installed : lang.error }}
+                            </template>
+                            <template v-else-if="game.type === 'downloading'">
+                                {{ lang.downloading }}
+                            </template>
                             <template v-else>
-                                {{ game.type === 'local' ? (game.playable ? lang.installed : lang.error) :
-                                    (game.type === "downloading" ? lang.downloading : lang.to_download) }}
+                                {{ lang.to_download }}
                             </template>
                         </div>
                     </div>
@@ -944,23 +999,32 @@ onMounted(async () => {
             <div :class="['btn', { enabled: activeGame && activeGame.type === 'local', disabled: !activeGame || activeGame.type !== 'local' }]"
                 @click="confirmDelete">{{ lang.delete }}</div>
             <div :class="['btn', 'main', {
-                enabled: activeGame,
-                disabled: !activeGame,
-                downloading: activeGame?.type === 'downloading'
+                enabled: activeGame && !activeGame.playing,
+                disabled: !activeGame || activeGame.playing,
+                downloading: activeGame?.type === 'downloading',
+                playing: activeGame?.type === 'playing'
             }]" @click="handleAction">
-                {{ activeGame ? (activeGame.type === 'local' ? (activeGame.playable ? lang.play : '[ --- ]') :
-                    activeGame.type === 'downloading' ? `[
-                ${lang.downloading} ]` : lang.download) : '[ --- ]' }}
+                {{
+                    !activeGame ? '[ --- ]' :
+                        activeGame.type === 'playing' ? `[ ${lang.playing} ]` :
+                            activeGame.type === 'local' ? (activeGame.playable ? lang.play : '[ --- ]') :
+                                activeGame.type === 'downloading' ? `[ ${lang.downloading} ]` :
+                lang.download
+                }}
             </div>
         </div>
         <Transition name="fade">
             <div v-if="showUpdateModal" id="update-overlay">
-                <div class="confirm-card" style="width: 450px; text-align: center;">
+                <div class="confirm-card" style="width: 480px; text-align: center;">
                     <div class="settings-title" style="color: var(--highlight-color)">
                         [ {{ lang.update_title }} ]
                     </div>
-                    <div class="confirm-body" style="margin: 20px 0;">
+                    <div class="confirm-body" style="margin: 10px 0;">
                         {{ lang.update_msg }} <span style="color: #00FF00;">{{ latestVersion }}</span>
+
+                        <div class="changelog-container">
+                            <pre class="changelog-text">{{ updateLog[currentLang] || updateLog['en'] }}</pre>
+                        </div>
                     </div>
                     <div class="confirm-actions" style="flex-direction: column; gap: 15px;">
                         <div class="btn main enabled" @click="goToDownload" style="font-size: 1.5rem;">
@@ -1027,12 +1091,20 @@ onMounted(async () => {
                         <input type="text" v-model="exeImportForm.name" class="search-input"
                             :placeholder="lang.placeholder_game_name" />
 
-                        <label>{{ lang.settings_game_path_label }}</label>
+                        <label>{{ lang.settings_import_author_label }}</label>
+                        <input type="text" v-model="exeImportForm.author" class="search-input"
+                            :placeholder="lang.placeholder_author" />
+
+                        <label>{{ lang.settings_game_path_label }} <span style="color:red">*</span></label>
                         <div style="display:flex;gap:8px;align-items:center;">
                             <input type="text" v-model="exeImportForm.path" class="search-input"
                                 placeholder="/Path/To/Game.exe" style="flex:1" />
                             <div class="btn browse-btn" @click="browseExeImportPath">{{ lang.settings_browse }}</div>
                         </div>
+
+                        <label>{{ lang.settings_import_engine_label }}</label>
+                        <input type="text" v-model="exeImportForm.engine" class="search-input"
+                            :placeholder="lang.placeholder_engine" />
 
                         <label>{{ lang.settings_import_image_label }}</label>
                         <div style="display:flex;gap:8px;align-items:center;">
@@ -1046,8 +1118,9 @@ onMounted(async () => {
                         <input type="file" id="import-exe-image-input" @change="handleExeImportImageSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
                     </div>
+
                     <div class="settings-actions">
-                        <div :class="['btn', { enabled: exeImportForm.name, disabled: !exeImportForm.name || !exeImportForm.path }]"
+                        <div :class="['btn', { enabled: exeImportForm.name && exeImportForm.path, disabled: !exeImportForm.name || !exeImportForm.path }]"
                             @click="confirmExeImport">
                             {{ lang.ok }}
                         </div>
@@ -1077,14 +1150,14 @@ onMounted(async () => {
                                 :class="['export-item', { selected: selectedAupIds.has(g.id) }]"
                                 @click="playSfx('switch'); selectedAupIds.has(g.id) ? selectedAupIds.delete(g.id) : selectedAupIds.add(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedAupIds.has(g.id) ? '[x]' : '[ ]' }}</span>
-                                {{ g.name[currentLang] }}
+                                {{ g.name[currentLang] || g.name['en'] }}
                             </div>
                         </div>
                     </div>
                     <div class="settings-actions">
                         <div :class="['btn', { enabled: selectedAupIds.size > 0 && !isImporting, disabled: selectedAupIds.size === 0 || isImporting }]"
                             @click="performAupImport">
-                            {{ isImporting? `${lang.importing}${zipProgress}%` : lang.import_aup_confirm }}
+                            {{ isImporting ? `${lang.importing}${zipProgress}%` : lang.import_aup_confirm }}
                         </div>
                         <div class="btn enabled" @click="cancelAupImport">{{
                             }}
@@ -1099,7 +1172,7 @@ onMounted(async () => {
             <div v-if="showConfirmDelete" id="confirm-overlay">
                 <div class="confirm-card">
                     <div class="confirm-body">{{ lang.confirm_del }} <span id="confirm-game-name">{{
-                        activeGame ? activeGame.name[currentLang] : '' }}</span>?</div>
+                        activeGame ? activeGame.name[currentLang] || activeGame.name['en'] : '' }}</span>?</div>
                     <div class="confirm-actions">
                         <div class="btn enabled" @click="performDelete">{{ lang.confirm_yes }}</div>
                         <div class="btn" @click="cancelDelete">{{ lang.confirm_no }}</div>
@@ -1127,7 +1200,7 @@ onMounted(async () => {
                                 @click="toggleExportSelection(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
                                 }}</span>
-                                {{ g.name[currentLang] }}
+                                {{ g.name[currentLang] || g.name['en'] }}
                             </div>
                         </div>
                     </div>
@@ -1195,6 +1268,14 @@ onMounted(async () => {
                                     :placeholder="lang.placeholder_download_path" style="flex:1" />
                                 <div class="btn browse-btn" @click="browseGamePath">{{ lang.settings_browse }}</div>
                             </div>
+                            <template v-if="activeGame.id.includes('local')">
+                                <label>{{ lang.settings_import_author_label }}</label>
+                                <input type="text" v-model="settingsForm.author" class="search-input"
+                                    :placeholder="lang.placeholder_author" />
+                                <label>{{ lang.settings_import_engine_label }}</label>
+                                <input type="text" v-model="settingsForm.engine" class="search-input"
+                                    :placeholder="lang.placeholder_engine" />
+                            </template>
                         </template>
                     </div>
                     <div class="settings-actions">
@@ -1456,7 +1537,12 @@ onMounted(async () => {
     pointer-events: none;
     opacity: 0.8;
 }
-
+.btn.playing {
+    color: #fff !important;
+    cursor: default;
+    pointer-events: none;
+    opacity: 0.8;
+}
 .btn:hover:not(.downloading) {
     color: var(--highlight-color);
 }
@@ -1656,5 +1742,66 @@ onMounted(async () => {
     color: white;
     background: #222;
     box-shadow: 0 0 5px rgba(255, 255, 255, 0.2);
+}
+
+/* 新增：更新日志容器样式 */
+.changelog-container {
+    margin-top: 15px;
+    background: rgba(255, 255, 255, 0.05);
+    /* 半透明黑背景 */
+    border: 2px solid #444;
+    /* 深灰色边框 */
+    padding: 10px;
+    text-align: left;
+    /* 日志左对齐 */
+    max-height: 160px;
+    /* 限制高度，防止撑开弹窗 */
+    overflow-y: auto;
+    /* 内容多时显示滚动条 */
+}
+
+.tag-playing {  
+    color: #00ffcc;
+    animation: blink 1.5s infinite;
+    /* 增加一个呼吸灯动画 */
+}
+
+/* 简单的呼吸灯动画 */
+@keyframes blink {
+    0% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.6;
+    }
+
+    100% {
+        opacity: 1;
+    }
+}
+
+.changelog-text {
+    font-family: 'fzxs', monospace;
+    font-size: 0.9rem;
+    color: #ccc;
+    white-space: pre-wrap;
+    /* 识别 \n 换行符 */
+    word-break: break-all;
+    margin: 0;
+    line-height: 1.5;
+}
+
+/* 复用你已有的白色滚动条样式 */
+.changelog-container::-webkit-scrollbar {
+    width: 6px;
+}
+
+.changelog-container::-webkit-scrollbar-thumb {
+    background: #fff;
+}
+
+.changelog-container::-webkit-scrollbar-track {
+    background: #000;
 }
 </style>
