@@ -162,7 +162,13 @@ app.whenReady().then(() => {
     if (result.canceled) {
       return null;
     } else {
-      return result.filePath;
+      let filePath = result.filePath;
+      const primaryExt = `.${extensions[0]}`;
+      if (!filePath.toLowerCase().endsWith(primaryExt.toLowerCase())) {
+        filePath += primaryExt;
+      }
+
+      return filePath;
     };
 
   });
@@ -243,7 +249,43 @@ app.whenReady().then(() => {
   ipcMain.handle('export-game', async (event, gamesToExport, saveDir) => {
     const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
 
-    // 定义权重
+    // 定义权重import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron';
+import { join } from 'path';
+import { exec } from 'child_process';
+import { electronApp, optimizer, is } from '@electron-toolkit/utils';
+import icon from '../../resources/icon.png?asset';
+import axios from 'axios';
+import fs from 'fs-extra';
+import path from 'path';
+import Seven from 'node-7z';
+import sevenBin from '7zip-bin';
+import Store from 'electron-store';
+import fastFolderSize from 'fast-folder-size';
+import { promisify } from 'util';
+import * as Searcher from 'ip2region-ts';
+import { publicIpv4 } from 'public-ip';
+
+
+if (process.platform === 'linux' && fs.existsSync(sevenBin.path7za)) {
+  try {
+    fs.chmodSync(sevenBin.path7za, 0o755); // 赋予可执行权限
+  } catch (err) {
+    console.error('无法自动修正 7zip 权限:', err);
+  }
+}
+const getSize = promisify(fastFolderSize);
+const store = new Store({
+
+  clearInvalidConfig: true,
+})
+function getdownloadpath(): string {
+  return app.getPath('downloads');
+}
+async function downloadFile(url: string, destPath: string, gameId: string, webContents: any): Promise<void> {
+  const writer = fs.createWriteStream(destPath);
+  const response = await axios({
+    url,
+
     const COPY_WEIGHT = 0.3;
     const ZIP_WEIGHT = 0.7;
 
