@@ -27,9 +27,7 @@ const store = new Store({
 
   clearInvalidConfig: true,
 })
-function getdownloadpath(): string {
-  return app.getPath('downloads');
-}
+
 async function downloadFile(url: string, destPath: string, gameId: string, webContents: any): Promise<void> {
   const writer = fs.createWriteStream(destPath);
   const response = await axios({
@@ -216,6 +214,30 @@ app.whenReady().then(() => {
       return filePaths[0]
     }
   });
+  ipcMain.handle('read-bgm-files', async (_event, bgmPath) => {
+    // 基础校验
+    if (!bgmPath) {
+      throw new Error("未指定背景音乐目录路径");
+    }
+
+    try {
+      if (!fs.existsSync(bgmPath)) {
+        // 抛出带语义的错误
+        throw new Error(`目录不存在: ${bgmPath}`);
+      }
+
+      const files = fs.readdirSync(bgmPath);
+
+      return files
+        .filter(file => /\.(mp3|wav|ogg)$/i.test(file))
+        .map(file => path.join(bgmPath, file));
+
+    } catch (err: any) {
+      // 将具体的系统错误重新包装并抛出
+      console.error("Main process error:", err);
+      throw new Error(`读取文件夹失败: ${err.message}`);
+    }
+  });
   ipcMain.handle('open-folder', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openDirectory']
@@ -245,8 +267,8 @@ app.whenReady().then(() => {
   ipcMain.handle('set-store-value', (_, key, value) => {
     store.set(key, value);
   })
-  ipcMain.handle('get-download-path', () => {
-    return getdownloadpath();
+  ipcMain.handle('get-local-path', (_, key) => {
+    return app.getPath(key);
   });
   ipcMain.handle('get-aup-config', async (event, archivePath) => {
     // 生成临时目录

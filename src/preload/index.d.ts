@@ -4,22 +4,23 @@ declare global {
   interface Window {
     electron: ElectronAPI
     api: {
-      openFile: (custom_name:string,extensions:any) => Promise<string>,
+      openFile: (custom_name: string, extensions: any) => Promise<string>,
       launchGame: (path: string) => Promise<void>,
       downloadGame: (url: string, destDir: string, filename: string, gameId: string) => Promise<boolean>,
-      getdownloadpath: () => string,
+      getlocalpath: (key: string) => string,
       openFolder: () => Promise<string>,
       getStoreValue: (key: string, value?: any) => Promise<any>,
       setStoreValue: (key: string, value: any) => Promise<void>,
       deleteFolder: (path: string) => Promise<void>,
-      parseAup : (path:string) => Promise<any>,
+      parseAup: (path: string) => Promise<any>,
       moveFolder: (archivePath: string, destDir: string) => Promise<void>,
       saveFile: (name: string, extensions: string[]) => Promise<string>,
       exportGame: (gamesToExport: any[], saveDir: string) => Promise<any>,
       checkIsChinaIP: () => Promise<boolean>,
       openExternal: (url: string) => Promise<void>,
       onDownloadProgress: (callback: (data: { id: string, percent: number }) => void) => void,
-      onZipProgress: (callback: (percent: number ) => void) => void
+      onZipProgress: (callback: (percent: number) => void) => void,
+      getBgmFiles: (bgmPath: string) => Promise<string[]>
     }
   }
 }

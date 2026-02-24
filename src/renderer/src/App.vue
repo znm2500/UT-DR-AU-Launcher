@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
 import soulIcon from './assets/spr_soul.png'
 import defaultCover from './assets/default_cover.webp'
 import path from 'path-browserify';
@@ -90,7 +90,9 @@ const I18N = {
         playing: "游玩中",
         placeholder_engine: "游戏制作引擎",
         announcement_title: "重要公告",
-        i_know: "我已知晓"
+        i_know: "我已知晓",
+        settings_music_dir_label: "音乐文件夹路径",
+        music: "音乐"
     },
     en: {
         ok: "OK",
@@ -167,10 +169,22 @@ const I18N = {
         playing: "PLAYING",
         parsing_msg: "Extracting resources, please wait...",
         announcement_title: "Announcement",
-        i_know: "I Got It"
+        i_know: "I Got It",
+        settings_music_dir_label: "Music Folder Path",
+        music: "MUSIC"
     }
 };
+function resetMusicPlayer() {
+    // 1. 停止当前播放的音频
+    bgmAudio.pause();
+    bgmAudio.src = "";
 
+    // 2. 重置响应式变量
+    isPlaying.value = false;
+    currentBgmIndex.value = -1;
+    currentTime.value = 0;
+    duration.value = 0;
+}
 // --- SFX (保持不变) ---
 const sfx: { [key: string]: HTMLAudioElement } = {};
 function initSfx() {
@@ -221,7 +235,8 @@ const updateLog = ref<Record<string, string>>({});
 const settings = ref({
     downloadPath: '',
     backgroundImage: '',
-    lang: 'en'
+    lang: 'en',
+    musicDirectory: ''
 });
 const showAnnouncement = ref(false);
 const announcementData = ref({ en: '', zh: '' });
@@ -254,7 +269,8 @@ const settingsForm = reactive({
     bgImageName: '',
     downloadPath: '',
     gamePath: '',
-    lang: 'en'
+    lang: 'en',
+    musicDirectory: ''
 });
 const showSubmitModal = ref(false);
 const submitForm = reactive({
@@ -367,8 +383,114 @@ const localUserGames = computed(() => {
 const isAllSelected = computed(() => {
     return localUserGames.value.length > 0 && selectedExportIds.value.size === localUserGames.value.length;
 });
+const showBgmPanel = ref(false);
+const bgmList = ref<string[]>([]);
+const currentBgmIndex = ref(-1);
+const isPlaying = ref(false);
+const bgmAudio = new Audio();
+const currentTime = ref(0);
+const duration = ref(0);
+const isDragging = ref(false); // 标记是否正在拖动进度条
+// 引用歌名 DOM 元素
+const nameRefs = ref<HTMLElement[]>([]);
+// 记录哪些索引的歌曲需要滚动
+const scrollOffsets = reactive<Record<number, number>>({});
 
-// --- Methods ---
+// 检查是否溢出的函数
+const checkOverflow = () => {
+    bgmList.value.forEach((_, index) => {
+        const el = nameRefs.value[index];
+        if (el) {
+            // 如果实际宽度大于容器宽度，则标记为需要滚动
+            scrollOffsets[index] = el.scrollWidth - 240.67;
+            console.log(el);
+        }
+    });
+};
+
+// 监听列表变化或面板打开时重新检查
+watch([bgmList, showBgmPanel], () => {
+    nextTick(() => {
+        checkOverflow();
+    });
+}, { deep: true });
+
+// 辅助：获取清理后的名称（如前所述）
+const getCleanName = (filePath: string) => {
+    return filePath.split(/[\\/]/).pop()?.replace(/\.[^/.]+$/, "") || "";
+};
+// 格式化时间 00:00
+const formatTime = (seconds: number) => {
+    if (!seconds || isNaN(seconds)) return "00:00";
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+};
+function onProgressInput(e: Event) {
+    isDragging.value = true;
+    const target = e.target as HTMLInputElement;
+    currentTime.value = parseFloat(target.value);
+}
+
+// 拖动结束（松开鼠标）
+function onProgressChange(e: Event) {
+    const target = e.target as HTMLInputElement;
+    bgmAudio.currentTime = parseFloat(target.value);
+    isDragging.value = false;
+    // 如果之前是暂停状态，拖动后可以保持暂停或自动播放，取决于需求
+}
+// 初始化加载音乐列表
+async function loadBgmList() {
+    try {
+        // 优先使用设置中的路径，如果没有则不加载
+        const targetPath = settings.value.musicDirectory;
+        if (!targetPath) return;
+
+        const files = await window.api.getBgmFiles(targetPath);
+        bgmList.value = files;
+    } catch (e) {
+        console.error("Failed to load BGM list", e);
+    }
+}
+
+function toggleBgmPanel() {
+    playSfx('switch');
+    showBgmPanel.value = !showBgmPanel.value;
+}
+
+function playBgm(index: number) {
+    if (index < 0 || index >= bgmList.value.length) return;
+
+    currentBgmIndex.value = index;
+    // 获取完整路径，如果是 Electron 环境通常需要 file:// 协议或后端处理
+    bgmAudio.src = `file://${bgmList.value[index]}`;
+    bgmAudio.play();
+    isPlaying.value = true;
+    playSfx('confirm');
+}
+
+function togglePlay() {
+    if (currentBgmIndex.value === -1) return; // 没有选中任何曲目
+    if (isPlaying.value) {
+        bgmAudio.pause();
+    } else {
+        console.log("Playing BGM:");
+        bgmAudio.play();
+    }
+    isPlaying.value = !isPlaying.value;
+    playSfx('switch');
+}
+
+function nextTrack() {
+    let next = (currentBgmIndex.value + 1) % bgmList.value.length;
+    playBgm(next);
+}
+
+function prevTrack() {
+    let prev = (currentBgmIndex.value - 1 + bgmList.value.length) % bgmList.value.length;
+    playBgm(prev);
+}
+
 
 function selectGame(index: number) {
     playSfx('switch');
@@ -407,7 +529,15 @@ function browseDownloadPath() {
         }
     })();
 }
-
+function browseMusicDirectory() {
+    playSfx('confirm');
+    (async () => {
+        const result = await window.api.openFolder();
+        if (result) {
+            settingsForm.musicDirectory = result;
+        }
+    })();
+}
 function triggerDialog(msg: string, title: string, sfx: string = 'error') {
     playSfx(sfx);
     errorTitle.value = title;
@@ -793,16 +923,18 @@ function browseGamePath() {
 function openSettings() {
     playSfx('confirm');
     settingsForm.downloadPath = settings.value.downloadPath;
+    settingsForm.musicDirectory = settings.value.musicDirectory;
     settingsForm.lang = settings.value.lang;
     if (activeGame.value) {
         settingsForm.name = activeGame.value.name[currentLang.value] || activeGame.value.name['en'] || '';
         settingsForm.gamePath = activeGame.value.execution_path;
         settingsForm.imageName = activeGame.value.img ? lang.value.settings_image_current : lang.value.settings_image_not_chosen;
+        if (activeGame.value.id.includes('local')) {
+            settingsForm.author = activeGame.value.author[currentLang.value] || activeGame.value.author['en'] || '';
+            settingsForm.engine = activeGame.value.engine || '';
+        }
     }
-    if (activeGame.value && activeGame.value.id.includes('local')) {
-        settingsForm.author = activeGame.value.author[currentLang.value] || activeGame.value.author['en'] || '';
-        settingsForm.engine = activeGame.value.engine || '';
-    }
+
     settingsForm.bgImage = null;
     settingsForm.bgImageName = settings.value.backgroundImage
         ? lang.value.settings_image_current
@@ -864,16 +996,30 @@ async function saveSettings() {
             }
 
         }
+        let settingsUpdated = false;
         // 更新内存中的设置状态
-        settings.value.downloadPath = settingsForm.downloadPath;
-        settings.value.lang = settingsForm.lang;
+        if (settings.value.downloadPath !== settingsForm.downloadPath) {
+            settings.value.downloadPath = settingsForm.downloadPath;
+            settingsUpdated = true;
+        }
+        if (settings.value.musicDirectory !== settingsForm.musicDirectory) {
+            settings.value.musicDirectory = settingsForm.musicDirectory;
+            tasks.push(loadBgmList());
+            resetMusicPlayer();
+            settingsUpdated = true;
+        }
+        if (settings.value.lang !== settingsForm.lang) {
+            settings.value.lang = settingsForm.lang;
+            settingsUpdated = true;
+        }
         // 等待所有图片读取完成
         await Promise.all(tasks);
 
         // 并行保存 Settings 和 UserGames
-        const saveTasks: Promise<any>[] = [
-            window.api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value)))
-        ];
+        const saveTasks: Promise<any>[] = [];
+        if (settingsUpdated) {
+            saveTasks.push(window.api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value))));
+        }
 
         if (gameUpdated || tasks.length > 0) { // 如果有图片更新或游戏信息变更
             saveTasks.push(window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value))));
@@ -1045,24 +1191,24 @@ const performSubmit = async () => {
 // --- App.vue ---
 
 onMounted(async () => {
-    // 0. 初始化基础功能
-    initSfx();
-
-    window.api.onDownloadProgress((data: { id: string, percent: number }) => {
-        downloadProgress[data.id] = data.percent;
-    });
-    window.api.onZipProgress((percent: number) => {
-        zipProgress.value = percent;
-
-    })
     try {
+        // 0. 初始化基础功能
+        initSfx();
 
+        window.api.onDownloadProgress((data: { id: string, percent: number }) => {
+            downloadProgress[data.id] = data.percent;
+        });
+        window.api.onZipProgress((percent: number) => {
+            zipProgress.value = percent;
+
+        })
         // 1. 发起所有本地读取请求 (并行)
         const pGames = window.api.getStoreValue('userGames', []);
         const pSettings = window.api.getStoreValue('settings', {
             'lang': 'en',
-            'downloadPath': await window.api.getdownloadpath(),
-            'backgroundImage': ''
+            'downloadPath': await window.api.getlocalpath('downloads'),
+            'backgroundImage': '',
+            'musicDirectory': await window.api.getlocalpath('music')
         }).catch((err) => { console.error(err) });
 
         // 2. 等待所有本地数据返回 (这是最快的 IO 方式)
@@ -1071,9 +1217,24 @@ onMounted(async () => {
         const [games, savedSettings, savedIgnoredVersion] = await Promise.all([
             pGames, pSettings, pIgnoredVersion
         ]);
-
         userGames.value = games;
         settings.value = savedSettings;
+        if (!settings.value.musicDirectory) {
+            settings.value.musicDirectory = await window.api.getlocalpath('music');
+        }
+        loadBgmList();
+        bgmAudio.addEventListener('timeupdate', () => {
+            if (!isDragging.value) {
+                currentTime.value = bgmAudio.currentTime;
+            }
+        });
+
+        // 监听元数据加载（获取总时长）
+        bgmAudio.addEventListener('loadedmetadata', () => {
+            duration.value = bgmAudio.duration;
+        });
+        // 设置循环播放
+        bgmAudio.onended = () => nextTrack();
         ignoredVersion = savedIgnoredVersion; // 赋值
 
     } catch (e) {
@@ -1193,7 +1354,49 @@ onMounted(async () => {
             </div>
             <div style="height: 20px; width: 100%; flex-shrink: 0;"></div>
         </div>
+        <div class="bgm-player-fixed">
+            <Transition name="fade">
+                <div v-if="showBgmPanel" class="bgm-panel">
+                    <div class="bgm-list undertale-scrollbar">
+                        <div v-for="(file, idx) in bgmList" :key="idx"
+                            :class="['bgm-item', { active: idx === currentBgmIndex }]" @click="playBgm(idx)">
 
+                            <div class="bgm-text-wrapper">
+                                <span ref="nameRefs" :class="[
+                                    'bgm-name-text',
+                                    { 'scrolling-text': idx === currentBgmIndex && scrollOffsets[idx] > 0 }
+                                ]" :style="{ '--scroll-dist': -scrollOffsets[idx]?.toString() + 'px' }">
+                                    {{ getCleanName(file) }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bgm-controls">
+                        <span class="bgm-ctrl-btn" @click="prevTrack">
+                            << </span>
+                                <span class="bgm-ctrl-btn" @click="togglePlay"
+                                    :class="{ 'disabled': currentBgmIndex === -1 }">
+                                    {{ isPlaying ? '❚❚' : '▶' }}
+                                </span>
+                                <span class="bgm-ctrl-btn" @click="nextTrack"> >> </span>
+                    </div>
+                    <div class="bgm-progress-container">
+                        <span class="time-text">{{ formatTime(currentTime) }}</span>
+
+                        <input type="range" class="ut-slider" :min="0" :max="duration || 0" :step="0.1"
+                            :value="currentTime" :disabled="currentBgmIndex === -1" @input="onProgressInput"
+                            @change="onProgressChange" />
+
+                        <span class="time-text">{{ formatTime(duration) }}</span>
+                    </div>
+                </div>
+            </Transition>
+
+            <div class="bgm-toggle-btn" @click="toggleBgmPanel">
+                <span>{{ lang.music }}</span>
+            </div>
+        </div>
         <div class="footer">
             <div class="btn enabled" @click="importGame">{{ lang.import }}</div>
             <div :class="['btn', { enabled: localUserGames.length > 0, disabled: localUserGames.length === 0 }]"
@@ -1267,7 +1470,7 @@ onMounted(async () => {
             <div v-if="showImportTypeModal" id="import-type-overlay">
                 <div class="confirm-card" style="width: 480px;">
                     <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title
-                    }} ]
+                        }} ]
                     </div>
                     <div class="confirm-actions"
                         style="flex-direction: column; align-items: flex-start; gap: 20px; padding: 0 20px;">
@@ -1275,7 +1478,7 @@ onMounted(async () => {
                             lang.import_method_exe }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{
                             lang.import_method_aup
-                        }}</div>
+                            }}</div>
                         <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
                         <div class="btn" style="align-self: center;"
                             @click="showImportTypeModal = false; playSfx('cancel');">{{
@@ -1464,7 +1667,7 @@ onMounted(async () => {
                                 :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
                                 @click="toggleExportSelection(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
-                                }}</span>
+                                    }}</span>
                                 {{ g.name[currentLang] || g.name['en'] }}
                             </div>
                         </div>
@@ -1501,7 +1704,7 @@ onMounted(async () => {
                                 }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                                 settingsForm.bgImageName
-                            }}</div>
+                                }}</div>
                         </div>
                         <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
@@ -1511,6 +1714,12 @@ onMounted(async () => {
                             <input type="text" v-model="settingsForm.downloadPath" class="search-input"
                                 :placeholder="lang.placeholder_download_path" style="flex:1" />
                             <div class="btn browse-btn" @click="browseDownloadPath">{{ lang.settings_browse }}</div>
+                        </div>
+                        <label>{{ lang.settings_music_dir_label }}</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="text" v-model="settingsForm.musicDirectory" class="search-input"
+                                :placeholder="lang.placeholder_music_directory" style="flex:1" />
+                            <div class="btn browse-btn" @click="browseMusicDirectory">{{ lang.settings_browse }}</div>
                         </div>
                         <template v-if="activeGame?.type === 'local'">
                             <label>{{ lang.settings_import_name_label }}</label>
@@ -1612,6 +1821,219 @@ onMounted(async () => {
 .fade-enter-from,
 .fade-leave-to {
     opacity: 0;
+}
+
+/* BGM 悬浮窗基础样式 */
+.bgm-player-fixed {
+    position: fixed;
+    bottom: 80px;
+    /* 避开页脚 */
+    right: 20px;
+    z-index: 100;
+    font-family: 'fzxs';
+}
+
+/* 悬浮按钮 - 像素感黑白边框 */
+.bgm-toggle-btn {
+    background: black;
+    border: 5px solid white;
+    color: white;
+    padding: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s;
+}
+
+.bgm-toggle-btn:hover {
+    border-color: #ffff00;
+    /* UT 交互常用的黄色 */
+    color: #ffff00;
+}
+
+/* 音乐列表展开面板 */
+.bgm-panel {
+    position: absolute;
+    bottom: 50px;
+    right: 0;
+    width: 300px;
+    background: black;
+    border: 5px solid white;
+    padding: 10px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+.bgm-list {
+    max-height: 200px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+}
+
+
+
+
+.bgm-item {
+    padding: 10px 15px;
+    /* 无论是否选中，间距始终保持一致 */
+    cursor: pointer;
+    background: transparent;
+    transition: background 0.2s;
+    display: flex;
+    align-items: center;
+}
+
+.bgm-item:hover {
+    color: white;
+    background: #222;
+}
+
+.bgm-text-wrapper {
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    /* 确保容器有宽度限制 */
+    display: block;
+}
+
+.bgm-name-text {
+    display: inline-block;
+    color: #aaa;
+    /* 未选中灰色 */
+    transition: color 0.2s;
+    /* 仅允许颜色过渡，不允许位移过渡 */
+    /* 强制重置可能存在的位移 */
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* 选中状态：仅改变颜色，不要动布局 */
+.bgm-item.active .bgm-name-text {
+    color: #ffff00;
+    /* UT 黄色 */
+}
+
+/* 跑马灯：确保动画从 translateX(0) 开始 */
+.scrolling-text {
+    /* linear 保证匀速，0.5s 是为了让你点击后先看清名字再开始滚 */
+    animation: ut-absolute-scroll 6s linear 1s infinite alternate;
+}
+
+@keyframes ut-absolute-scroll {
+
+
+    0%,
+    15% {
+        transform: translateX(0);
+    }
+
+    85%,
+    100% {
+        transform: translateX(var(--scroll-dist));
+    }
+}
+
+/* 控制按钮组 */
+.bgm-controls {
+    display: flex;
+    justify-content: space-around;
+    border-top: 2px solid white;
+    padding-top: 10px;
+}
+
+.bgm-ctrl-btn {
+    color: white;
+    cursor: pointer;
+    font-size: 1.2rem;
+
+    /* --- 消除位移的核心属性 --- */
+    display: inline-flex;
+    justify-content: center;
+    /* 水平居中 */
+    align-items: center;
+    /* 垂直居中 */
+    width: 60px;
+    /* 固定一个足够宽的宽度，防止字符变动撑开容器 */
+    text-align: center;
+    transition: color 0.1s;
+    /* 只允许颜色变化，禁止 transition: all */
+    user-select: none;
+    /* 防止快速点击时选中文字蓝块 */
+}
+
+.bgm-ctrl-btn:not(.disabled):hover {
+    color: yellow;
+    /* UT 标志性的红色 */
+}
+
+.bgm-ctrl-btn.disabled {
+    color: #555;
+    /* 暗灰色 */
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+/* 进度条容器 */
+.bgm-progress-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 5px;
+    margin-top: 5px;
+}
+
+.time-text {
+    font-family: 'fzxs';
+    font-size: 14px;
+    color: white;
+    min-width: 45px;
+    text-align: center;
+}
+
+/* 进度条基础样式 */
+.ut-slider {
+    -webkit-appearance: none;
+    flex: 1;
+    height: 4px;
+    background: #000;
+    border: 2px solid #fff;
+    /* 像素感白边 */
+    outline: none;
+    cursor: pointer;
+}
+
+/* 进度条滑块 (Chrome/Edge/Safari) */
+.ut-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 20px;
+    background: #fff;
+    border: 2px solid #000;
+    cursor: pointer;
+    box-shadow: 0 0 0 2px #fff;
+    /* 双重边框感 */
+}
+
+/* 进度条滑块 (Firefox) */
+.ut-slider::-moz-range-thumb {
+    width: 12px;
+    height: 20px;
+    background: #fff;
+    border: 2px solid #000;
+    border-radius: 0;
+    cursor: pointer;
+}
+
+/* 禁用状态 */
+.ut-slider:disabled {
+    border-color: #555;
+    background: #222;
+    cursor: not-allowed;
+}
+
+.ut-slider:disabled::-webkit-slider-thumb {
+    background: #555;
+    box-shadow: 0 0 0 2px #555;
 }
 
 .top-bar {
