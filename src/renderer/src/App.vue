@@ -7,7 +7,7 @@ import confirmWav from './assets/sfx/confirm.wav'
 import cancelWav from './assets/sfx/cancel.wav'
 import switchWav from './assets/sfx/switch.wav'
 import saveWav from './assets/sfx/save.wav'
-
+import SparkMD5 from 'spark-md5';
 const availableLanguages = [
     { code: 'en', label: 'English' },
     { code: 'zh', label: '中文' }
@@ -17,6 +17,16 @@ const availableLanguages = [
 const I18N = {
     zh: {
         ok: "确定",
+        submit: "提交",
+        submitting: "提交中...",
+        submit_title: "上传游戏申请",
+        submit_success: "提交成功!",
+        submit_failed: "提交失败!",
+        game_name: "游戏名称",
+        download_link: "下载链接",
+        cover_path: "封面图片",
+        select_file: "选择图片",
+        upload: "上传",
         search: "搜索AU...",
         import: "[ 导入 ]",
         export: "[ 导出 ]",
@@ -78,11 +88,23 @@ const I18N = {
         settings_import_engine_label: "引擎",
         placeholder_author: "游戏作者名称",
         playing: "游玩中",
-        placeholder_engine: "游戏制作引擎"
+        placeholder_engine: "游戏制作引擎",
+        announcement_title: "重要公告",
+        i_know: "我已知晓"
     },
     en: {
         ok: "OK",
         search: "SEARCH AU...",
+        upload: "UPLOAD",
+        submitting: "Submitting...",
+        submit_success: "Submit successful!",
+        submit_failed: "Submit failed!",
+        submit_title: "SUBMIT GAME",
+        game_name: "Game Name",
+        download_link: "Download Link",
+        cover_path: "Cover Image",
+        select_file: "Select Image",
+        submit: "SUBMIT",
         import: "[ IMPORT ]",
         export: "[ EXPORT ]",
         delete: "[ DELETE ]",
@@ -143,7 +165,9 @@ const I18N = {
         placeholder_author: "Game author name",
         placeholder_engine: "Game engine",
         playing: "PLAYING",
-        parsing_msg: "Extracting resources, please wait..."
+        parsing_msg: "Extracting resources, please wait...",
+        announcement_title: "Announcement",
+        i_know: "I Got It"
     }
 };
 
@@ -191,15 +215,16 @@ const force_render_key = ref(0);
 const searchInput = ref('');
 const GITHUB_GAMES = ref<any[]>([]);
 const userGames = ref<any[]>([]);
-const currentVersion = '1.0.0';
+const currentVersion = '1.1.0';
 const latestVersion = ref('');
 const updateLog = ref<Record<string, string>>({});
 const settings = ref({
     downloadPath: '',
     backgroundImage: '',
-    lang: 'en',
-    ignoredVersion: ''
+    lang: 'en'
 });
+const showAnnouncement = ref(false);
+const announcementData = ref({ en: '', zh: '' });
 const showUpdateModal = ref(false);
 const showExeImportModal = ref(false);
 const exeImportForm = reactive({
@@ -210,6 +235,8 @@ const exeImportForm = reactive({
     image: null as File | null,
     imageName: ''
 });
+let announcementIndex = 0;
+let ignoredVersion = '';
 const currentLang = computed(() => settings.value.lang);
 const selectedIndex = ref(0);
 const visibleCount = ref(5);
@@ -229,6 +256,13 @@ const settingsForm = reactive({
     gamePath: '',
     lang: 'en'
 });
+const showSubmitModal = ref(false);
+const submitForm = reactive({
+    name: '',
+    link: '',
+    img: null as File | null,
+    imgName: ''
+});
 const isImporting = ref(false);
 // 导出相关状态
 const zipProgress = ref(0);
@@ -245,7 +279,8 @@ const isChinaIP = ref(false);
 const errorMessage = ref('');
 const showErrorModal = ref(false);
 const downloadProgress = reactive<{ [key: string]: number }>({});
-
+const isSubmitting = ref(false); // 正在发送中的状态
+const COOLDOWN_MS = 60000;       // 冷却时间：30秒
 // --- Computed Properties ---
 const lang = computed(() => I18N[currentLang.value] || I18N.en);
 function forceRender() {
@@ -275,7 +310,7 @@ const fullList = computed(() => {
                 g.type = downloadIdSet.has(g.id) ? 'downloading' : 'remote';
                 g.playable = false;
                 // 只有在需要显示时才拼接字符串
-                g.img = `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${g.id}.webp`;
+                g.img = false ? `https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/${g.id}.webp` : `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${g.id}.webp`;
                 g.execution_path = '';
                 gameMap.set(g.id, g);
             }
@@ -286,16 +321,26 @@ const fullList = computed(() => {
 
 const filteredList = computed(() => {
     const query = searchInput.value.toLowerCase();
+
     if (!query.trim()) return fullList.value;
 
     return fullList.value.filter(g => {
         // 1. 匹配名称 (多语言)
-        if (g.name && typeof g.name === 'object') {
-            if (g.name.zh?.toLowerCase().includes(query) || g.name.en?.toLowerCase().includes(query)) return true;
+        if (g.name) {
+            for (const name of Object.values(g.name)) {
+                if ((name as string).toLowerCase().includes(query)) {
+                    return true;
+                }
+            }
         }
 
-        // 2. 匹配作者 (Author)
-        if (g.author && g.author.toLowerCase().includes(query)) return true;
+        if (g.author) {
+            for (const name of Object.values(g.author)) {
+                if ((name as string).toLowerCase().includes(query)) {
+                    return true;
+                }
+            }
+        }
 
         // 3. 匹配引擎 (Engine)
         if (g.engine && g.engine.toLowerCase().includes(query)) return true;
@@ -338,11 +383,20 @@ function goToDownload() {
 
 async function ignoreVersion() {
     playSfx('cancel');
-    settings.value.ignoredVersion = latestVersion.value;
-    // 使用 JSON.parse(JSON.stringify 优化
-    await window.api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value)));
+    // 修改处：直接操作独立的 ref
+    ignoredVersion = latestVersion.value;
+
+    // 修改处：保存到独立的 store key
+    await window.api.setStoreValue('ignoredVersion', ignoredVersion);
+
     showUpdateModal.value = false;
 }
+const closeAnnouncement = async () => {
+    playSfx('confirm');
+    // 保存当前的索引到本地存储，下次除非 index 改变否则不再显示
+    await window.api.setStoreValue('last_announcement_index', announcementIndex);
+    showAnnouncement.value = false;
+};
 
 function browseDownloadPath() {
     playSfx('confirm');
@@ -398,10 +452,11 @@ async function handleAction() {
             await window.api.launchGame(game.execution_path);
             game.type = originalType;
             forceRender();
-          
+
         } catch (err: any) {
             triggerDialog(`${err}`, lang.value.error);
             activeGame.value.playable = false;
+            activeGame.value.type = 'local';
             window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
         }
     } else if (activeGame.value.type === 'remote') {
@@ -415,16 +470,15 @@ async function handleAction() {
         downloadIdSet.add(game_temp.id);
         downloadProgress[game_temp.id] = 0;
         forceRender();
-
         try {
             const url = isChinaIP.value
                 ? `https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`
                 : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`;
-
+            console.log("url:", url);
             await window.api.downloadGame(
                 url,
-                `${settings.value.downloadPath}/${game_temp.id}`,
-                `${game_temp.id}.7z`,
+                path.join(settings.value.downloadPath, game_temp.id),
+                `${crypto.randomUUID()}.7z`,
                 game_temp.id
             );
 
@@ -746,7 +800,7 @@ function openSettings() {
         settingsForm.imageName = activeGame.value.img ? lang.value.settings_image_current : lang.value.settings_image_not_chosen;
     }
     if (activeGame.value && activeGame.value.id.includes('local')) {
-        settingsForm.author = activeGame.value.author || '';
+        settingsForm.author = activeGame.value.author[currentLang.value] || activeGame.value.author['en'] || '';
         settingsForm.engine = activeGame.value.engine || '';
     }
     settingsForm.bgImage = null;
@@ -758,77 +812,80 @@ function openSettings() {
 }
 
 async function saveSettings() {
-    playSfx('save');
 
+    try {
+        // 准备异步任务列表
+        const tasks: Promise<any>[] = [];
 
-
-    // 准备异步任务列表
-    const tasks: Promise<any>[] = [];
-
-    // 处理背景图片
-    if (settingsForm.bgImage) {
-        const bgTask = readFileAsDataURL(settingsForm.bgImage).then(data => {
-            settings.value.backgroundImage = data;
-        });
-        tasks.push(bgTask);
-    }
-
-    // 处理游戏设置
-    let gameUpdated = false;
-    if (activeGame.value) {
-        if (activeGame.value.type === 'local') {
-            // 名字修改
-            if (activeGame.value.name[currentLang.value] !== settingsForm.name) {
-                console.log(currentLang.value);
-                activeGame.value.name[currentLang.value] = settingsForm.name;
-                gameUpdated = true;
-            }
-            // 路径修改
-            if (activeGame.value.execution_path !== settingsForm.gamePath) {
-                activeGame.value.playable = true;
-                activeGame.value.execution_path = settingsForm.gamePath;
-                gameUpdated = true;
-            }
-            // 封面图片修改
-            if (settingsForm.image) {
-                const imgTask = readFileAsDataURL(settingsForm.image).then(data => {
-                    if (activeGame.value) activeGame.value.img = data;
-                    gameUpdated = true;
-                });
-                tasks.push(imgTask);
-            }
-            if (activeGame.value.id.includes('local')) {
-                // 作者修改
-                if (activeGame.value.author.name[currentLang.value] !== settingsForm.author) {
-                    activeGame.value.author.name[currentLang.value] = settingsForm.author;
-                    gameUpdated = true;
-                }
-                // 引擎修改
-                if (activeGame.value.engine !== settingsForm.engine) {
-                    activeGame.value.engine = settingsForm.engine;
-                    gameUpdated = true;
-                }
-            }
+        // 处理背景图片
+        if (settingsForm.bgImage) {
+            const bgTask = readFileAsDataURL(settingsForm.bgImage).then(data => {
+                settings.value.backgroundImage = data;
+            });
+            tasks.push(bgTask);
         }
 
+        // 处理游戏设置
+        let gameUpdated = false;
+        if (activeGame.value) {
+            if (activeGame.value.type === 'local') {
+                // 名字修改
+                if (activeGame.value.name[currentLang.value] !== settingsForm.name) {
+                    console.log(currentLang.value);
+                    activeGame.value.name[currentLang.value] = settingsForm.name;
+                    gameUpdated = true;
+                }
+                // 路径修改
+                if (activeGame.value.execution_path !== settingsForm.gamePath) {
+                    activeGame.value.playable = true;
+                    activeGame.value.execution_path = settingsForm.gamePath;
+                    gameUpdated = true;
+                }
+                // 封面图片修改
+                if (settingsForm.image) {
+                    const imgTask = readFileAsDataURL(settingsForm.image).then(data => {
+                        if (activeGame.value) activeGame.value.img = data;
+                        gameUpdated = true;
+                    });
+                    tasks.push(imgTask);
+                }
+                if (activeGame.value.id.includes('local')) {
+                    // 作者修改
+                    if (activeGame.value.author[currentLang.value] !== settingsForm.author) {
+                        activeGame.value.author[currentLang.value] = settingsForm.author;
+                        gameUpdated = true;
+                    }
+                    // 引擎修改
+                    if (activeGame.value.engine !== settingsForm.engine) {
+                        activeGame.value.engine = settingsForm.engine;
+                        gameUpdated = true;
+                    }
+                }
+            }
+
+        }
+        // 更新内存中的设置状态
+        settings.value.downloadPath = settingsForm.downloadPath;
+        settings.value.lang = settingsForm.lang;
+        // 等待所有图片读取完成
+        await Promise.all(tasks);
+
+        // 并行保存 Settings 和 UserGames
+        const saveTasks: Promise<any>[] = [
+            window.api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value)))
+        ];
+
+        if (gameUpdated || tasks.length > 0) { // 如果有图片更新或游戏信息变更
+            saveTasks.push(window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value))));
+        }
+
+        await Promise.all(saveTasks);
+        showSettings.value = false;
+        triggerDialog(lang.value.success, lang.value.success, 'save');
+    } catch (err: any) {
+        console.error(err);
+        triggerDialog(lang.value.error, lang.value.error_occurred, 'error');
     }
-    // 更新内存中的设置状态
-    settings.value.downloadPath = settingsForm.downloadPath;
-    settings.value.lang = settingsForm.lang;
-    // 等待所有图片读取完成
-    await Promise.all(tasks);
-
-    // 并行保存 Settings 和 UserGames
-    const saveTasks: Promise<any>[] = [
-        window.api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value)))
-    ];
-
-    if (gameUpdated || tasks.length > 0) { // 如果有图片更新或游戏信息变更
-        saveTasks.push(window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value))));
-    }
-
-    await Promise.all(saveTasks);
-    showSettings.value = false;
 }
 
 function cancelSettings() {
@@ -856,6 +913,134 @@ function handleBgFileSelect(e: Event) {
     }
 }
 
+
+// 点击右上角申请按钮
+const openSubmitLink = () => {
+    playSfx('confirm');
+
+    // 自动回填逻辑：activeGame 是你 App.vue 中定义的当前选中的计算属性或 ref
+    if (activeGame.value && activeGame.value.id.includes('local')) {
+        submitForm.name = activeGame.value.name[currentLang.value || 'en'] || '';
+        submitForm.img = activeGame.value.img || '';
+        submitForm.imgName = lang.value.settings_image_not_chosen;
+    } else {
+        submitForm.name = '';
+        submitForm.img = null;
+        submitForm.imgName = lang.value.settings_image_not_chosen;
+    }
+    submitForm.link = '';
+    showSubmitModal.value = true;
+};
+
+function handleSubmitImageSelect(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+        submitForm.img = input.files[0];
+        submitForm.imgName = input.files[0].name;
+    }
+}
+
+const performSubmit = async () => {
+    // 1. 基础字段校验
+    if (!submitForm.name || !submitForm.link) {
+        // 这里可以使用你现有的 triggerDialog 提示用户必填
+        return;
+    }
+
+    // 2. 频率限制检查（结合 LocalStorage 防止刷新绕过）
+    const now = Date.now();
+    const lastSubmitAt = Number(localStorage.getItem('last_game_submit_time') || 0);
+
+    if (now - lastSubmitAt < COOLDOWN_MS) {
+        const remaining = Math.ceil((COOLDOWN_MS - (now - lastSubmitAt)) / 1000);
+        // 使用 lang 标准化错误提示
+        triggerDialog(
+            `${lang.value.submit_too_fast || '提交太快了'} (${remaining}s)`,
+            lang.value.error,
+            'error'
+        );
+        return;
+    }
+
+    // 3. 锁定状态，防止连点
+    if (isSubmitting.value) return;
+    isSubmitting.value = true;
+
+    // 机器人 Webhook 地址
+    const WEBHOOK_URL = '';
+
+    try {
+        // --- 第一步：发送 Markdown 文字信息 ---
+        const textMsg = {
+            msgtype: "markdown",
+            markdown: {
+                content: `### 🎮 收到新的游戏申请\n` +
+                    `> **游戏名称**：<font color="info">${submitForm.name}</font>\n` +
+                    `> **下载链接**：[点击查看](${submitForm.link})\n` +
+                    `> **提交时间**：${new Date().toLocaleString()}`
+            }
+        };
+
+        const res = await fetch(WEBHOOK_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(textMsg)
+        });
+
+        if (!res.ok) throw new Error('Text message failed');
+
+        // --- 第二步：处理并发送图片 (如果有) ---
+        // 只有当图片存在，且不是默认占位符时才发送
+        if (submitForm.img && submitForm.imgName !== lang.value.settings_image_not_chosen) {
+
+            const arrayBuffer = await submitForm.img.arrayBuffer();
+
+            // 计算图片 MD5 (企业微信要求)
+            const spark = new SparkMD5.ArrayBuffer();
+            spark.append(arrayBuffer);
+            const md5 = spark.end();
+
+            // 转 Base64
+            const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+                let binary = '';
+                const bytes = new Uint8Array(buffer);
+                for (let i = 0; i < bytes.byteLength; i++) {
+                    binary += String.fromCharCode(bytes[i]);
+                }
+                return window.btoa(binary);
+            };
+            const base64 = arrayBufferToBase64(arrayBuffer);
+
+            const imgResponse = await fetch(WEBHOOK_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    msgtype: "image",
+                    image: {
+                        base64: base64,
+                        md5: md5
+                    }
+                })
+            });
+
+            if (!imgResponse.ok) throw new Error('Image upload failed');
+        }
+
+        // --- 第三步：成功处理 ---
+        // 记录本次成功提交的时间到本地
+        localStorage.setItem('last_game_submit_time', Date.now().toString());
+
+        showSubmitModal.value = false; // 关闭弹窗
+        triggerDialog(lang.value.submit_success, lang.value.success, 'save');
+
+    } catch (error) {
+        console.error('推送失败:', error);
+        triggerDialog(lang.value.submit_failed, lang.value.error, 'error');
+    } finally {
+        // 解锁按钮
+        isSubmitting.value = false;
+    }
+};
 // --- Lifecycle ---
 // --- App.vue ---
 
@@ -877,17 +1062,19 @@ onMounted(async () => {
         const pSettings = window.api.getStoreValue('settings', {
             'lang': 'en',
             'downloadPath': await window.api.getdownloadpath(),
-            'backgroundImage': '',
-            'ignoredVersion': currentVersion
+            'backgroundImage': ''
         }).catch((err) => { console.error(err) });
 
         // 2. 等待所有本地数据返回 (这是最快的 IO 方式)
-        const [games, savedSettings] = await Promise.all([pGames, pSettings]);
+        const pIgnoredVersion = window.api.getStoreValue('ignoredVersion', 'v1.1.0');
 
-        // 3. 立即应用数据，让界面不再白屏
+        const [games, savedSettings, savedIgnoredVersion] = await Promise.all([
+            pGames, pSettings, pIgnoredVersion
+        ]);
+
         userGames.value = games;
-        // 合并设置默认值
         settings.value = savedSettings;
+        ignoredVersion = savedIgnoredVersion; // 赋值
 
     } catch (e) {
         console.error("Critical: Failed to load local data", e);
@@ -922,11 +1109,21 @@ onMounted(async () => {
             if (res.ok) {
                 const data = await res.json();
                 GITHUB_GAMES.value = data.games;
-                if (data.newest_version !== currentVersion && data.newest_version !== settings.value.ignoredVersion) {
+                if (data.newest_version !== currentVersion && data.newest_version !== ignoredVersion) {
                     latestVersion.value = data.newest_version;
                     updateLog.value = data.update_log || {};
                     showUpdateModal.value = true;
                 }
+                const lastReadIndex = await window.api.getStoreValue('last_announcement_index', 0);
+
+                // 如果服务器公告索引不为 0 且 与本地保存的不一致，则显示弹窗
+                if (data.announcement_index !== 0 && data.announcement_index !== lastReadIndex) {
+                    announcementData.value = data.announcement || { en: '', zh: '' };
+                    showAnnouncement.value = true;
+                    announcementIndex = data.announcement_index;
+                }
+
+
             } else {
                 console.warn(`Fetch returned status: ${res.status}`);
             }
@@ -947,7 +1144,11 @@ onMounted(async () => {
 <template>
     <div id="app" :style="appBackgroundStyle">
         <div class="top-bar">
+
             <input type="text" v-model="searchInput" class="search-input" :placeholder="lang.search" />
+            <div class="submit-btn" @click="openSubmitLink">
+                {{ lang.submit }}
+            </div>
         </div>
 
         <div id="game-list">
@@ -974,6 +1175,9 @@ onMounted(async () => {
                             </template>
                             <template v-else-if="game.type === 'downloading'">
                                 {{ lang.downloading }}
+                                <span v-if="downloadProgress[game.id] !== undefined">
+                                    {{ downloadProgress[game.id] }}%
+                                </span>
                             </template>
                             <template v-else>
                                 {{ lang.to_download }}
@@ -1009,10 +1213,32 @@ onMounted(async () => {
                         activeGame.type === 'playing' ? `[ ${lang.playing} ]` :
                             activeGame.type === 'local' ? (activeGame.playable ? lang.play : '[ --- ]') :
                                 activeGame.type === 'downloading' ? `[ ${lang.downloading} ]` :
-                lang.download
+                                    lang.download
                 }}
             </div>
         </div>
+        <Transition name="fade">
+            <div v-if="showAnnouncement" id="announcement-overlay" class="modal-overlay">
+                <div class="confirm-card"
+                    style="width: 500px; max-height: 80vh; display: flex; flex-direction: column;">
+                    <div class="settings-title" style="color: white; text-align: center;">
+                        [ {{ lang.announcement_title }} ]
+                    </div>
+
+                    <div class="confirm-body"
+                        style="margin: 20px 0; overflow-y: auto; text-align: left; line-height: 1.6; font-size: 1.1rem; white-space: pre-wrap;">
+                        {{ announcementData[currentLang] || announcementData['en'] }}
+                    </div>
+
+                    <div class="confirm-actions"
+                        style="display: flex; justify-content: center; width: 100%; margin: 10px 0 0 0; padding: 0;">
+                        <div class="btn main enabled" @click="closeAnnouncement"
+                            style="padding: 10px 40px; font-size: 1.2rem; margin: 0;"> {{ lang.i_know }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
         <Transition name="fade">
             <div v-if="showUpdateModal" id="update-overlay">
                 <div class="confirm-card" style="width: 480px; text-align: center;">
@@ -1116,7 +1342,7 @@ onMounted(async () => {
                             </div>
                         </div>
                         <input type="file" id="import-exe-image-input" @change="handleExeImportImageSelect"
-                            accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
+                            accept=".jpg,.jpeg,.png" style="display:none" />
                     </div>
 
                     <div class="settings-actions">
@@ -1131,7 +1357,46 @@ onMounted(async () => {
                 </div>
             </div>
         </Transition>
+        <Transition name="fade">
+            <div v-if="showSubmitModal" id="exe-import-overlay">
+                <div class="settings-card" style="width: 600px;">
+                    <div class="settings-title">{{ lang.submit_title }}</div>
 
+                    <div class="settings-body scrollable-settings">
+                        <label>{{ lang.game_name }}</label>
+                        <input type="text" v-model="submitForm.name" class="search-input"
+                            style="width: 100%; box-sizing: border-box;" />
+
+                        <label>{{ lang.download_link }}</label>
+                        <input type="text" v-model="submitForm.link" class="search-input"
+                            style="width: 100%; box-sizing: border-box;" placeholder="https://..." />
+
+                        <label>{{ lang.cover_path }}</label>
+                        <div style="display:flex; gap:12px; align-items:center;">
+                            <label class="btn enabled" for="submit-image-input" style="cursor: pointer;">
+                                {{ lang.settings_choose_image }}
+                            </label>
+                            <div
+                                style="color:#888; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                {{ submitForm.imgName }}
+                            </div>
+                        </div>
+                        <input type="file" id="submit-image-input" @change="handleSubmitImageSelect"
+                            accept=".jpg,.png,.jpeg" style="display:none" />
+                    </div>
+
+                    <div class="settings-actions" style="margin-top: 20px; gap: 40px;">
+                        <div :class="['btn', 'main', { enabled: !isSubmitting, disabled: isSubmitting }]"
+                            @click="performSubmit">
+                            {{ isSubmitting ? lang.submitting : lang.submit }}
+                        </div>
+                        <div class="btn enabled" @click="showSubmitModal = false; playSfx('cancel')">
+                            {{ lang.settings_cancel }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
         <Transition name="fade">
             <div v-if="showAupImportModal" id="aup-import-overlay">
                 <div class="settings-card">
@@ -1261,7 +1526,7 @@ onMounted(async () => {
                                     }}</div>
                             </div>
                             <input type="file" id="setting-game-image-input" @change="handleFileSelect"
-                                accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
+                                accept=".jpg,.jpeg,.png" style="display:none" />
                             <label>{{ lang.settings_game_path_label }}</label>
                             <div style="display:flex;gap:8px;align-items:center;">
                                 <input type="text" v-model="settingsForm.gamePath" class="search-input"
@@ -1349,26 +1614,87 @@ onMounted(async () => {
     opacity: 0;
 }
 
-/* --- 顶部栏 --- */
 .top-bar {
-    max-width: 1200px;
-    width: 75%;
+    max-width: 1400px;
+    /* 调大容器最大宽度以适应更长的搜索框 */
+    width: 95%;
     margin-top: 30px;
     display: flex;
     justify-content: center;
+    /* 核心：确保搜索框水平居中 */
     align-items: center;
+    position: relative;
+    /* 核心：为按钮提供定位基准 */
 }
 
 .search-input {
-    width: 60%;
+    width: 600px;
+    /* 增加长度 */
+    background: black;
+    border: 5px solid white;
+    /* 保持硬核像素边框 */
+    color: white;
+    font-family: 'fzxs', monospace;
+    font-size: 1.5rem;
+    /* 调大字体，解决“字变小了”的问题 */
+    padding: 12px 20px;
+    /* 增加内边距，让搜索框看起来更厚实 */
+    outline: none;
+    text-align: center;
+    /* 文字居中，符合 Undertale 审美 */
+}
+
+/* 右上角按钮 - 风格完全同步搜索框 */
+.submit-btn {
+    position: absolute;
+    /* 脱离文档流，不影响搜索框居中 */
+    right: 0;
+    /* 固定在最右侧 */
+
     background: black;
     border: 5px solid white;
     color: white;
     font-family: 'fzxs', monospace;
-    font-size: 1.4rem;
-    padding: 5px 10px;
-    outline: none;
-    text-align: center;
+    font-size: 1.2rem;
+    /* 按钮文字略小于搜索框，分清主次 */
+    padding: 8px 15px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.1s;
+}
+
+/* 悬停效果 */
+.submit-btn:hover {
+    color: #ffff00;
+    /* 经典的战斗选择黄色 */
+    border-color: #ffff00;
+}
+
+/* 适配窄屏 */
+@media (max-width: 1100px) {
+    .search-input {
+        width: 50%;
+        /* 屏幕缩小时自动变窄 */
+    }
+}
+
+@media (max-width: 850px) {
+    .top-bar {
+        flex-direction: column;
+        gap: 20px;
+    }
+
+    .submit-btn {
+        position: static;
+        /* 手机端取消绝对定位，排在搜索框下面 */
+        width: 600px;
+        max-width: 100%;
+        text-align: center;
+    }
+
+    .search-input {
+        width: 100%;
+    }
 }
 
 /* --- 列表区域 --- */
@@ -1537,12 +1863,14 @@ onMounted(async () => {
     pointer-events: none;
     opacity: 0.8;
 }
+
 .btn.playing {
     color: #fff !important;
     cursor: default;
     pointer-events: none;
     opacity: 0.8;
 }
+
 .btn:hover:not(.downloading) {
     color: var(--highlight-color);
 }
@@ -1584,7 +1912,8 @@ onMounted(async () => {
 #aup-import-overlay,
 #exe-import-overlay,
 #update-overlay,
-#parsing-overlay {
+#parsing-overlay,
+#announcement-overlay {
     position: fixed;
     inset: 0;
     display: flex;
@@ -1616,6 +1945,20 @@ onMounted(async () => {
     display: flex;
     flex-direction: column;
     gap: 12px;
+}
+
+/* 确保弹窗内的 input 宽度能够随容器自适应 */
+.settings-card .search-input {
+    text-align: left;
+    /* 弹窗内左对齐更符合输入习惯 */
+    padding: 10px;
+    font-size: 1.2rem;
+    margin-bottom: 5px;
+}
+
+.settings-card label {
+    margin-top: 10px;
+    display: block;
 }
 
 .scrollable-settings {
@@ -1760,7 +2103,7 @@ onMounted(async () => {
     /* 内容多时显示滚动条 */
 }
 
-.tag-playing {  
+.tag-playing {
     color: #00ffcc;
     animation: blink 1.5s infinite;
     /* 增加一个呼吸灯动画 */

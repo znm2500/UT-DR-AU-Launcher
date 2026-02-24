@@ -13,7 +13,7 @@ import fastFolderSize from 'fast-folder-size';
 import { promisify } from 'util';
 import * as Searcher from 'ip2region-ts';
 import { publicIpv4 } from 'public-ip';
-
+import { session } from 'electron'
 
 if (process.platform === 'linux' && fs.existsSync(sevenBin.path7za)) {
   try {
@@ -106,8 +106,21 @@ function createWindow(): void {
 // Some APIs can only be used after this _ occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.electron');
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    {
+      // 只拦截 GitCode 的请求，避免干扰其他业务
+      urls: ['https://raw.gitcode.com/*']
+    },
+    (details, callback) => {
+      const { requestHeaders } = details
+      // 2. 伪装成普通的浏览器 User-Agent (防止 GitCode 屏蔽非浏览器请求)
+      requestHeaders['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      requestHeaders['Referer'] = 'https://gitcode.com/dashboard';
 
+      callback({ requestHeaders })
+    }
+  )
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
   // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
@@ -151,7 +164,31 @@ app.whenReady().then(() => {
     }
   })
   ipcMain.handle('remove-directory', async (_, dirPath) => {
-    fs.remove(path.join(dirPath, '..'));
+    try {
+      // 获取父目录路径（即你原本打算删除的目录）
+      const targetPath = path.join(dirPath, '..');
+
+      // 1. 获取文件夹大小 (单位为字节)
+
+      const size: any = await getSize(targetPath);
+      const HALF_GB = 512 * 1024 * 1024;
+
+      if (size && size > HALF_GB) {
+        // 2. 如果大于 1GB：仅删除指定的 exe 文件本体 (即 dirPath)
+        if (await fs.pathExists(dirPath)) {
+          await fs.remove(dirPath);
+          console.log(`检测到文件夹大于 0.5GB，仅删除可执行文件: ${dirPath}`);
+        }
+      } else {
+        // 3. 如果小于或等于 1GB：删除整个文件夹
+        await fs.remove(targetPath);
+        console.log(`检测到文件夹小于 0.5GB，已清理整个目录: ${targetPath}`);
+      }
+      return true;
+    } catch (error) {
+      console.error('删除目录时出错:', error);
+      throw error;
+    }
   });
   ipcMain.handle('save-file', async (_, name, extensions) => {
     const result = await dialog.showSaveDialog({

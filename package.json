@@ -32,7 +32,8 @@
     "ip2region-ts": "^2.0.1",
     "node-7z": "^3.0.0",
     "path-browserify": "^1.0.1",
-    "public-ip": "^8.0.0"
+    "public-ip": "^8.0.0",
+    "spark-md5": "^3.0.2"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "3.0.0",
@@ -89,10 +90,15 @@
     "mac": {
       "category": "public.app-category.games",
       "icon": "build/icon.icns",
-      "target": ["dmg"]
+      "target": [
+        "dmg"
+      ]
     },
     "linux": {
-      "target": ["deb","rpm"],
+      "target": [
+        "deb",
+        "rpm"
+      ],
       "category": "Game",
       "icon": "build/icons",
       "artifactName": "${productName}-v${version}-Linux-${arch}.${ext}"
