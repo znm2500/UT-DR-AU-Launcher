@@ -92,6 +92,8 @@ const I18N = {
         announcement_title: "重要公告",
         i_know: "我已知晓",
         settings_music_dir_label: "音乐文件夹路径",
+        submit_description: "说明",
+        placeholder_description: "请输入游戏说明或补充信息...",
         music: "音乐"
     },
     en: {
@@ -171,6 +173,8 @@ const I18N = {
         announcement_title: "Announcement",
         i_know: "I Got It",
         settings_music_dir_label: "Music Folder Path",
+        submit_description: "Description",
+        placeholder_description: "Enter game description or additional info...",
         music: "MUSIC"
     }
 };
@@ -277,6 +281,7 @@ const submitForm = reactive({
     name: '',
     link: '',
     img: null as File | null,
+    desc: '',
     imgName: ''
 });
 const isImporting = ref(false);
@@ -292,6 +297,10 @@ const aupPendingGames = ref<any[]>([]);
 const selectedAupIds = ref<Set<string>>(new Set());
 const tmpAupDir = ref('');
 const isChinaIP = ref(false);
+const canSubmit = computed(() => {
+    // 确保名称和链接都不为空（去除首尾空格）
+    return submitForm.name.trim() !== '' && submitForm.link.trim() !== '';
+});
 const errorMessage = ref('');
 const showErrorModal = ref(false);
 const downloadProgress = reactive<{ [key: string]: number }>({});
@@ -402,7 +411,7 @@ const checkOverflow = () => {
         const el = nameRefs.value[index];
         if (el) {
             // 如果实际宽度大于容器宽度，则标记为需要滚动
-            scrollOffsets[index] = el.scrollWidth - 240.67;
+            scrollOffsets[index] = el.scrollWidth - 234.67;
             console.log(el);
         }
     });
@@ -1074,6 +1083,7 @@ const openSubmitLink = () => {
         submitForm.img = null;
         submitForm.imgName = lang.value.settings_image_not_chosen;
     }
+    submitForm.desc = '';
     submitForm.link = '';
     showSubmitModal.value = true;
 };
@@ -1113,7 +1123,7 @@ const performSubmit = async () => {
     isSubmitting.value = true;
 
     // 机器人 Webhook 地址
-    const WEBHOOK_URL = '';
+    const WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9c34b350-f8e9-4508-b5f9-2364eb84166c';
 
     try {
         // --- 第一步：发送 Markdown 文字信息 ---
@@ -1123,6 +1133,7 @@ const performSubmit = async () => {
                 content: `### 🎮 收到新的游戏申请\n` +
                     `> **游戏名称**：<font color="info">${submitForm.name}</font>\n` +
                     `> **下载链接**：[点击查看](${submitForm.link})\n` +
+                    `> **补充说明**：${submitForm.desc || '无'}\n` +
                     `> **提交时间**：${new Date().toLocaleString()}`
             }
         };
@@ -1275,13 +1286,13 @@ onMounted(async () => {
                     updateLog.value = data.update_log || {};
                     showUpdateModal.value = true;
                 }
-                const lastReadIndex = await window.api.getStoreValue('last_announcement_index', 0);
-
+                const lastReadIndex = await window.api.getStoreValue('last_announcement_index', '');
+                console.log('Last Read Index:', lastReadIndex, data.announcement?.en);
                 // 如果服务器公告索引不为 0 且 与本地保存的不一致，则显示弹窗
-                if (data.announcement_index !== 0 && data.announcement_index !== lastReadIndex) {
+                if (data.announcement?.en !== lastReadIndex && data.announcement?.en) {
                     announcementData.value = data.announcement || { en: '', zh: '' };
                     showAnnouncement.value = true;
-                    announcementIndex = data.announcement_index;
+                    announcementIndex = data.announcement?.en;
                 }
 
 
@@ -1357,7 +1368,7 @@ onMounted(async () => {
         <div class="bgm-player-fixed">
             <Transition name="fade">
                 <div v-if="showBgmPanel" class="bgm-panel">
-                    <div class="bgm-list undertale-scrollbar">
+                    <div class="bgm-list">
                         <div v-for="(file, idx) in bgmList" :key="idx"
                             :class="['bgm-item', { active: idx === currentBgmIndex }]" @click="playBgm(idx)">
 
@@ -1430,7 +1441,9 @@ onMounted(async () => {
 
                     <div class="confirm-body"
                         style="margin: 20px 0; overflow-y: auto; text-align: left; line-height: 1.6; font-size: 1.1rem; white-space: pre-wrap;">
-                        {{ announcementData[currentLang] || announcementData['en'] }}
+                        <div class="changelog-container">
+                            {{ announcementData[currentLang] || announcementData['en'] }}
+                        </div>
                     </div>
 
                     <div class="confirm-actions"
@@ -1573,7 +1586,9 @@ onMounted(async () => {
                         <label>{{ lang.download_link }}</label>
                         <input type="text" v-model="submitForm.link" class="search-input"
                             style="width: 100%; box-sizing: border-box;" placeholder="https://..." />
-
+                        <label>{{ lang.submit_description }}</label>
+                        <textarea v-model="submitForm.desc" :placeholder="lang.placeholder_desc"
+                            class="settings-input submit-textarea"></textarea>
                         <label>{{ lang.cover_path }}</label>
                         <div style="display:flex; gap:12px; align-items:center;">
                             <label class="btn enabled" for="submit-image-input" style="cursor: pointer;">
@@ -1589,7 +1604,7 @@ onMounted(async () => {
                     </div>
 
                     <div class="settings-actions" style="margin-top: 20px; gap: 40px;">
-                        <div :class="['btn', 'main', { enabled: !isSubmitting, disabled: isSubmitting }]"
+                        <div :class="['btn', 'main', { enabled: canSubmit && !isSubmitting, disabled: !canSubmit || isSubmitting }]"
                             @click="performSubmit">
                             {{ isSubmitting ? lang.submitting : lang.submit }}
                         </div>
@@ -2049,6 +2064,37 @@ onMounted(async () => {
     /* 核心：为按钮提供定位基准 */
 }
 
+/* 说明输入框的基础样式 */
+.submit-textarea {
+    width: 100%;
+    height: 100px;
+    /* 固定高度 */
+    min-height: 100px;
+    max-height: 100px;
+    resize: none;
+    /* 禁用右下角拉伸 */
+    padding: 10px;
+    font-family: inherit;
+    line-height: 1.5;
+    background: black;
+    /* 黑色背景 */
+    border: 5px solid white;
+    /* 初始深色边框 */
+    color: white;
+    box-sizing: border-box;
+    display: block;
+}
+
+/* 焦点状态：边框变白，模仿选中的像素感 */
+.submit-textarea:focus {
+    outline: none;
+}
+
+/* 内部滚动条样式：保持黑白像素风 */
+.submit-textarea::-webkit-scrollbar {
+    width: 8px;
+}
+
 .search-input {
     width: 600px;
     /* 增加长度 */
@@ -2395,20 +2441,41 @@ onMounted(async () => {
 /* 全局滚动条样式定义 */
 #game-list::-webkit-scrollbar,
 .scrollable-settings::-webkit-scrollbar,
-.export-list-container::-webkit-scrollbar {
+.export-list-container::-webkit-scrollbar,
+.error-body::-webkit-scrollbar {
     width: 10px;
 }
 
 #game-list::-webkit-scrollbar-track,
+.submit-textarea::-webkit-scrollbar-track,
 .scrollable-settings::-webkit-scrollbar-track,
-.export-list-container::-webkit-scrollbar-track {
+.export-list-container::-webkit-scrollbar-track,
+.error-body::-webkit-scrollbar-track,
+.changelog-container::-webkit-scrollbar-track,
+.bgm-list::-webkit-scrollbar-track {
     background: #000;
 }
 
+.submit-textarea::-webkit-scrollbar-thumb,
 #game-list::-webkit-scrollbar-thumb,
 .scrollable-settings::-webkit-scrollbar-thumb,
-.export-list-container::-webkit-scrollbar-thumb {
-    background: #fff;
+.export-list-container::-webkit-scrollbar-thumb,
+.error-body::-webkit-scrollbar-thumb,
+.changelog-container::-webkit-scrollbar-thumb,
+.bgm-list::-webkit-scrollbar-thumb {
+    background: #444;
+    border: 1px solid #000;
+}
+
+.submit-textarea::-webkit-scrollbar-thumb:hover,
+#game-list::-webkit-scrollbar-thumb:hover,
+.scrollable-settings::-webkit-scrollbar-thumb:hover,
+.export-list-container::-webkit-scrollbar-thumb:hover,
+.error-body::-webkit-scrollbar-thumb:hover,
+.changelog-container::-webkit-scrollbar-thumb:hover,
+.bgm-list::-webkit-scrollbar-thumb:hover {
+    background: white;
+    /* 鼠标悬停滑块变白 */
 }
 
 .settings-title {
@@ -2457,18 +2524,6 @@ onMounted(async () => {
     margin-top: 10px;
 }
 
-/* --- 复用自定义滚动条 --- */
-.error-body::-webkit-scrollbar {
-    width: 10px;
-}
-
-.error-body::-webkit-scrollbar-track {
-    background: #000;
-}
-
-.error-body::-webkit-scrollbar-thumb {
-    background: #fff;
-}
 
 .error-actions .btn {
     font-size: 1.6rem;
@@ -2558,15 +2613,8 @@ onMounted(async () => {
 }
 
 /* 复用你已有的白色滚动条样式 */
-.changelog-container::-webkit-scrollbar {
+.changelog-container::-webkit-scrollbar,
+.bgm-list::-webkit-scrollbar {
     width: 6px;
-}
-
-.changelog-container::-webkit-scrollbar-thumb {
-    background: #fff;
-}
-
-.changelog-container::-webkit-scrollbar-track {
-    background: #000;
 }
 </style>
