@@ -1123,7 +1123,7 @@ const performSubmit = async () => {
     isSubmitting.value = true;
 
     // 机器人 Webhook 地址
-    const WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9c34b350-f8e9-4508-b5f9-2364eb84166c';
+    const WEBHOOK_URL = '';
 
     try {
         // --- 第一步：发送 Markdown 文字信息 ---
@@ -1483,7 +1483,7 @@ onMounted(async () => {
             <div v-if="showImportTypeModal" id="import-type-overlay">
                 <div class="confirm-card" style="width: 480px;">
                     <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title
-                        }} ]
+                    }} ]
                     </div>
                     <div class="confirm-actions"
                         style="flex-direction: column; align-items: flex-start; gap: 20px; padding: 0 20px;">
@@ -1491,7 +1491,7 @@ onMounted(async () => {
                             lang.import_method_exe }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{
                             lang.import_method_aup
-                            }}</div>
+                        }}</div>
                         <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
                         <div class="btn" style="align-self: center;"
                             @click="showImportTypeModal = false; playSfx('cancel');">{{
@@ -1682,7 +1682,7 @@ onMounted(async () => {
                                 :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
                                 @click="toggleExportSelection(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
-                                    }}</span>
+                                }}</span>
                                 {{ g.name[currentLang] || g.name['en'] }}
                             </div>
                         </div>
@@ -1716,10 +1716,10 @@ onMounted(async () => {
                         <div style="display:flex;gap:8px;align-items:center;">
                             <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
                                 lang.settings_choose_image
-                                }}</label>
+                            }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                                 settingsForm.bgImageName
-                                }}</div>
+                            }}</div>
                         </div>
                         <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
