@@ -76,6 +76,7 @@ function createWindow(): void {
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       webSecurity: false,
+      spellcheck: false,
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
     }
@@ -163,6 +164,10 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('remove-directory', async (_, dirPath) => {
     try {
+      if (fs.statSync(dirPath).isDirectory()) {
+        await fs.remove(dirPath);
+        return true;
+      }
       // 获取父目录路径（即你原本打算删除的目录）
       const targetPath = path.join(dirPath, '..');
 

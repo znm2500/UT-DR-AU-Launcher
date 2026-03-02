@@ -16,6 +16,9 @@ const availableLanguages = [
 // --- I18N (保持不变) ---
 const I18N = {
     zh: {
+        cyf_download_success: "CYF下载完成!",
+        title_cyf_download: "CYF下载",
+        cyf_downloading: "该游戏为CYF平台游戏，正在为您下载CYF...",
         ok: "确定",
         submit: "提交",
         submitting: "提交中...",
@@ -97,6 +100,9 @@ const I18N = {
         music: "音乐"
     },
     en: {
+        cyf_download_success: "CYF Download Success!",
+        title_cyf_download: "CYF Download",
+        cyf_downloading: "This game is from CYF platform, downloading CYF for you...",
         ok: "OK",
         search: "SEARCH AU...",
         upload: "UPLOAD",
@@ -232,6 +238,8 @@ function readFileAsDataURL(file: File): Promise<string> {
 const force_render_key = ref(0);
 const searchInput = ref('');
 const GITHUB_GAMES = ref<any[]>([]);
+const CYF_GAMES = ref<any[]>([]);
+const CYF_PATH = ref('');
 const userGames = ref<any[]>([]);
 const currentVersion = '1.1.0';
 const latestVersion = ref('');
@@ -246,6 +254,7 @@ const showAnnouncement = ref(false);
 const announcementData = ref({ en: '', zh: '' });
 const showUpdateModal = ref(false);
 const showExeImportModal = ref(false);
+const showDownloadModal = ref(false);
 const exeImportForm = reactive({
     name: '',
     path: '',
@@ -341,12 +350,23 @@ const fullList = computed(() => {
             }
         });
     }
+    if (CYF_GAMES.value.length > 0) {
+        CYF_GAMES.value.forEach(g => {
+            if (!gameMap.has(g.id)) {
+                g.type = downloadIdSet.has(g.id) ? 'downloading' : 'remote';
+                g.playable = false;
+                // 只有在需要显示时才拼接字符串
+                g.img = false ? `https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/${g.id}.webp` : `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${g.id}.webp`;
+                g.execution_path = '';
+                gameMap.set(g.id, g);
+            }
+        });
+    }
     return Array.from(gameMap.values());
 });
 
 const filteredList = computed(() => {
     const query = searchInput.value.toLowerCase();
-
     if (!query.trim()) return fullList.value;
 
     return fullList.value.filter(g => {
@@ -361,14 +381,14 @@ const filteredList = computed(() => {
 
         if (g.author) {
             for (const name of Object.values(g.author)) {
-                if ((name as string).toLowerCase().includes(query)) {
+                if ((name as string).toLowerCase().startsWith(query)) {
                     return true;
                 }
             }
         }
 
         // 3. 匹配引擎 (Engine)
-        if (g.engine && g.engine.toLowerCase().includes(query)) return true;
+        if (g.engine && g.engine.toLowerCase().startsWith(query)) return true;
 
         // 4. 原有的兜底逻辑 (遍历其他字符串字段)
         for (const k of Object.keys(g)) {
@@ -583,7 +603,7 @@ async function handleAction() {
             if (indexInUserGames !== -1) {
                 const [movedGame] = userGames.value.splice(indexInUserGames, 1);
                 userGames.value.unshift(movedGame);
-                window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value))).catch(console.error);
+                window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local")).catch(console.error);
                 selectedIndex.value = 0;
             }
             game.type = 'playing';
@@ -596,15 +616,30 @@ async function handleAction() {
             triggerDialog(`${err}`, lang.value.error);
             activeGame.value.playable = false;
             activeGame.value.type = 'local';
-            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+            if (activeGame.value.execution_path.includes('Create Your Frisk 0.6.6 LTS 4.exe')) await window.api.setStoreValue('cyfpath', '');
+            window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local"));
         }
     } else if (activeGame.value.type === 'remote') {
         if (!navigator.onLine) {
             triggerDialog(lang.value.network_disconnected, lang.value.error);
-
             return;
         }
         const game_temp = activeGame.value;
+        if (game_temp.version === "0.0.2" && !CYF_PATH.value) {
+            showDownloadModal.value = true;
+            if (downloadProgress.hasOwnProperty("cyf")) return;
+            downloadProgress["cyf"] = 0;
+            await window.api.downloadGame(
+                isChinaIP ? "https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z" : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z`,
+                path.join(settings.value.downloadPath, "createyourfrisk"),
+                `${crypto.randomUUID()}.7z`,
+                "cyf"
+            );
+            CYF_PATH.value = path.join(settings.value.downloadPath, "createyourfrisk");
+            await window.api.setStoreValue("cyfpath", CYF_PATH.value);
+            showDownloadModal.value = false;
+            triggerDialog(lang.value.cyf_download_success, lang.value.success, 'save');
+        }
         game_temp.type = 'downloading';
         downloadIdSet.add(game_temp.id);
         downloadProgress[game_temp.id] = 0;
@@ -616,16 +651,14 @@ async function handleAction() {
             console.log("url:", url);
             await window.api.downloadGame(
                 url,
-                path.join(settings.value.downloadPath, game_temp.id),
+                game_temp.version != "0.0.2" ? path.join(settings.value.downloadPath, game_temp.id) : path.join(CYF_PATH.value, "Mods", game_temp.id),
                 `${crypto.randomUUID()}.7z`,
                 game_temp.id
             );
 
             game_temp.type = 'local';
             game_temp.playable = true;
-            game_temp.execution_path = `${settings.value.downloadPath}/${game_temp.id}/game.exe`;
-            if (game_temp.version) delete game_temp.version;
-
+            game_temp.execution_path = game_temp.version == "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : path.join(settings.value.downloadPath, game_temp.id, "game.exe");
             const existingIndex = userGames.value.findIndex(g => g.id === game_temp.id);
             if (existingIndex !== -1) {
                 userGames.value.splice(existingIndex, 1);
@@ -637,7 +670,7 @@ async function handleAction() {
             delete downloadProgress[game_temp.id];
 
             // 优化保存
-            await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+            await window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local"));
 
             selectedIndex.value = 0;
             forceRender();
@@ -710,7 +743,7 @@ async function confirmExeImport() {
         }
 
         userGames.value.push(newGame);
-        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)));
+        await window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local"));
         exeImportForm.name = '';
         exeImportForm.author = '';
         exeImportForm.engine = '';
@@ -815,7 +848,7 @@ async function performAupImport() {
 
         // 并行执行存储和清理
         await Promise.all([
-            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value))),
+            window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local")),
             delayDelete(tmpAupDir.value)
         ]);
         zipProgress.value = 0;
@@ -898,7 +931,8 @@ function performDelete() {
     const gameId = activeGame.value.id;
     const game = userGames.value.find(g => g.id === gameId);
     if (game) execution_path = game.execution_path;
-
+    if (game.version === "0.0.2")
+        execution_path = path.join(CYF_PATH.value, "Mods", gameId);
     // 更新内存状态
     userGames.value = userGames.value.filter(g => g.id !== gameId);
 
@@ -909,7 +943,7 @@ function performDelete() {
         // 优化：删除文件和保存配置可以并行，因为内存状态已经更新了
         await Promise.all([
             execution_path ? window.api.deleteFolder(execution_path) : Promise.resolve(),
-            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value)))
+            window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local"))
         ]);
     })();
 }
@@ -1027,11 +1061,11 @@ async function saveSettings() {
         // 并行保存 Settings 和 UserGames
         const saveTasks: Promise<any>[] = [];
         if (settingsUpdated) {
-            saveTasks.push(window.api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value))));
+            saveTasks.push(window.api.setStoreValue('settings', JSON.stringify(settings.value)));
         }
 
         if (gameUpdated || tasks.length > 0) { // 如果有图片更新或游戏信息变更
-            saveTasks.push(window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value))));
+            saveTasks.push(window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local")));
         }
 
         await Promise.all(saveTasks);
@@ -1123,7 +1157,7 @@ const performSubmit = async () => {
     isSubmitting.value = true;
 
     // 机器人 Webhook 地址
-    const WEBHOOK_URL = '';
+    const WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9c34b350-f8e9-4508-b5f9-2364eb84166c';
 
     try {
         // --- 第一步：发送 Markdown 文字信息 ---
@@ -1205,7 +1239,6 @@ onMounted(async () => {
     try {
         // 0. 初始化基础功能
         initSfx();
-
         window.api.onDownloadProgress((data: { id: string, percent: number }) => {
             downloadProgress[data.id] = data.percent;
         });
@@ -1221,15 +1254,16 @@ onMounted(async () => {
             'backgroundImage': '',
             'musicDirectory': await window.api.getlocalpath('music')
         }).catch((err) => { console.error(err) });
-
+        const pCyfpath = window.api.getStoreValue('cyfpath', '');
         // 2. 等待所有本地数据返回 (这是最快的 IO 方式)
-        const pIgnoredVersion = window.api.getStoreValue('ignoredVersion', 'v1.1.0');
+        const pIgnoredVersion = window.api.getStoreValue('ignoredVersion', '1.1.0');
 
-        const [games, savedSettings, savedIgnoredVersion] = await Promise.all([
-            pGames, pSettings, pIgnoredVersion
+        const [games, savedSettings, savedIgnoredVersion, savedCyfPath] = await Promise.all([
+            pGames, pSettings, pIgnoredVersion, pCyfpath
         ]);
         userGames.value = games;
         settings.value = savedSettings;
+        CYF_PATH.value = savedCyfPath;
         if (!settings.value.musicDirectory) {
             settings.value.musicDirectory = await window.api.getlocalpath('music');
         }
@@ -1281,6 +1315,7 @@ onMounted(async () => {
             if (res.ok) {
                 const data = await res.json();
                 GITHUB_GAMES.value = data.games;
+                CYF_GAMES.value = data.cyf_games;
                 if (data.newest_version !== currentVersion && data.newest_version !== ignoredVersion) {
                     latestVersion.value = data.newest_version;
                     updateLog.value = data.update_log || {};
@@ -1786,6 +1821,26 @@ onMounted(async () => {
                     </div>
                     <div class="error-actions">
                         <div class="btn main enabled" @click="closeError">{{ lang.ok }}</div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
+        <Transition name="fade">
+            <div v-if="showDownloadModal" id="cyf-modal-overlay">
+                <div class="cyf-window">
+                    <div class="cyf-close-btn" @click="showDownloadModal = false; playSfx('cancel');">&times</div>
+                    <div class="cyf-header">{{ lang.title_cyf_download }}</div>
+
+                    <div class="cyf-content">
+                        <p>{{ lang.cyf_downloading }}</p>
+
+                        <div class="cyf-progress-track">
+                            <div class="cyf-progress-fill"
+                                :style="{ 'width': downloadProgress['cyf']?.toString() + '%' }">
+                            </div>
+                        </div>
+
+                        <div class="cyf-percentage">{{ downloadProgress["cyf"] }}%</div>
                     </div>
                 </div>
             </div>
@@ -2381,7 +2436,8 @@ onMounted(async () => {
 #exe-import-overlay,
 #update-overlay,
 #parsing-overlay,
-#announcement-overlay {
+#announcement-overlay,
+#cyf-modal-overlay {
     position: fixed;
     inset: 0;
     display: flex;
@@ -2389,6 +2445,77 @@ onMounted(async () => {
     justify-content: center;
     background: rgba(0, 0, 0, 0.8);
     z-index: 9999;
+}
+
+
+/* 窗口主体：黑底白边 */
+.cyf-window {
+    width: 450px;
+    background: black;
+    border: 5px solid white;
+    padding: 25px;
+    box-sizing: border-box;
+    position: relative;
+}
+
+.cyf-close-btn {
+    position: absolute;
+    /* 脱离文档流 */
+    top: 10px;
+    /* 距离顶部的距离 */
+    right: 10px;
+    /* 距离右侧的距离 */
+    cursor: pointer;
+    /* 鼠标悬停显示手型 */
+    z-index: 100;
+    /* 确保在最上层，不被内容遮挡 */
+}
+
+/* 悬停效果：反色或者变灰 */
+.cyf-close-btn:hover {
+    color: #888;
+    /* 悬停时变成灰色 */
+}
+
+.cyf-header {
+    font-size: 1.8rem;
+    color: white;
+    margin-bottom: 20px;
+    text-align: left;
+    border-bottom: 2px solid white;
+    padding-bottom: 10px;
+}
+
+.cyf-content p {
+    color: white;
+    font-size: 1.1rem;
+    margin-bottom: 25px;
+    line-height: 1.4;
+}
+
+/* 进度条轨道：白边黑底 */
+.cyf-progress-track {
+    width: 100%;
+    height: 24px;
+    border: 2px solid white;
+    background: transparent;
+    position: relative;
+    margin-bottom: 10px;
+}
+
+/* 进度条填充：纯白 */
+.cyf-progress-fill {
+    height: 100%;
+    background: white;
+    transition: width 0.2s linear;
+    /* 线性增长更像下载 */
+}
+
+.cyf-percentage {
+    color: white;
+    text-align: right;
+    font-size: 1.2rem;
+    font-family: 'fzxs';
 }
 
 .confirm-card,
