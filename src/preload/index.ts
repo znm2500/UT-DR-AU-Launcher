@@ -24,6 +24,9 @@ api.exportGame = (gamesToExport, saveDir) => ipcRenderer.invoke('export-game', g
 api.checkIsChinaIP = () => ipcRenderer.invoke('check-local-ip-region');
 api.openExternal = (url: string) => ipcRenderer.invoke('open-external-url', url);
 api.getBgmFiles = (bgmPath: string) => ipcRenderer.invoke('read-bgm-files', bgmPath);
+api.isParentFolder = (childPath: string, targetParentPath: string) => ipcRenderer.invoke('is-parent-dir', childPath, targetParentPath);
+api.isFolderExisted = (folder_path: string) => ipcRenderer.invoke('folder-is-existed', folder_path);
+api.renameFolder = (oldPath: string, newName: string) => ipcRenderer.invoke('rename-directory', oldPath, newName);
 api.onDownloadProgress = (callback: (data: { id: string, percent: number }) => void) => {
   // 移除之前的监听器防止重复
   ipcRenderer.removeAllListeners('download-progress');

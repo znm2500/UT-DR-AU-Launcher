@@ -20,7 +20,10 @@ declare global {
       openExternal: (url: string) => Promise<void>,
       onDownloadProgress: (callback: (data: { id: string, percent: number }) => void) => void,
       onZipProgress: (callback: (percent: number) => void) => void,
-      getBgmFiles: (bgmPath: string) => Promise<string[]>
+      getBgmFiles: (bgmPath: string) => Promise<string[]>,
+      isFolderExisted: (folder_path: string) => Promise<boolean>,
+      isParentFolder: (childPath: string, targetParentPath: string) => Promise<boolean>,
+      renameFolder: (oldPath: string, newName: string) => Promise<void>
     }
   }
 }

@@ -97,7 +97,10 @@ const I18N = {
         settings_music_dir_label: "音乐文件夹路径",
         submit_description: "说明",
         placeholder_description: "请输入游戏说明或补充信息...",
-        music: "音乐"
+        music: "音乐",
+        no_cyf_mod_found: '未找到相应CYF模组!',
+        import_method_cyf: "> 导入CYF模组 (Folder)",
+        cyf_import_invalid_name: "CYF模组含有非法字符!"
     },
     en: {
         cyf_download_success: "CYF Download Success!",
@@ -181,7 +184,10 @@ const I18N = {
         settings_music_dir_label: "Music Folder Path",
         submit_description: "Description",
         placeholder_description: "Enter game description or additional info...",
-        music: "MUSIC"
+        music: "MUSIC",
+        no_cyf_mod_found: "No corresponding CYF mod found!",
+        import_method_cyf: "> IMPORT CYF MOD (Folder)",
+        cyf_import_invalid_name: "CYF mod contains invalid characters!"
     }
 };
 function resetMusicPlayer() {
@@ -238,10 +244,9 @@ function readFileAsDataURL(file: File): Promise<string> {
 const force_render_key = ref(0);
 const searchInput = ref('');
 const GITHUB_GAMES = ref<any[]>([]);
-const CYF_GAMES = ref<any[]>([]);
 const CYF_PATH = ref('');
 const userGames = ref<any[]>([]);
-const currentVersion = '1.1.0';
+const currentVersion = '1.2.0';
 const latestVersion = ref('');
 const updateLog = ref<Record<string, string>>({});
 const settings = ref({
@@ -255,6 +260,7 @@ const announcementData = ref({ en: '', zh: '' });
 const showUpdateModal = ref(false);
 const showExeImportModal = ref(false);
 const showDownloadModal = ref(false);
+const showCyfImportModal = ref(false);
 const exeImportForm = reactive({
     name: '',
     path: '',
@@ -332,6 +338,7 @@ const appBackgroundStyle = computed(() => {
 // 这里本身逻辑不复杂，但为了避免频繁重建 Set，逻辑保持清晰即可
 const fullList = computed(() => {
     const gameMap = new Map();
+
     // 先添加本地游戏
     userGames.value.forEach(g => gameMap.set(g.id, g));
 
@@ -350,18 +357,7 @@ const fullList = computed(() => {
             }
         });
     }
-    if (CYF_GAMES.value.length > 0) {
-        CYF_GAMES.value.forEach(g => {
-            if (!gameMap.has(g.id)) {
-                g.type = downloadIdSet.has(g.id) ? 'downloading' : 'remote';
-                g.playable = false;
-                // 只有在需要显示时才拼接字符串
-                g.img = false ? `https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/${g.id}.webp` : `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${g.id}.webp`;
-                g.execution_path = '';
-                gameMap.set(g.id, g);
-            }
-        });
-    }
+
     return Array.from(gameMap.values());
 });
 
@@ -381,7 +377,7 @@ const filteredList = computed(() => {
 
         if (g.author) {
             for (const name of Object.values(g.author)) {
-                if ((name as string).toLowerCase().startsWith(query)) {
+                if ((name as string).toLowerCase().includes(query)) {
                     return true;
                 }
             }
@@ -432,7 +428,7 @@ const checkOverflow = () => {
         if (el) {
             // 如果实际宽度大于容器宽度，则标记为需要滚动
             scrollOffsets[index] = el.scrollWidth - 234.67;
-            console.log(el);
+
         }
     });
 };
@@ -503,7 +499,7 @@ function togglePlay() {
     if (isPlaying.value) {
         bgmAudio.pause();
     } else {
-        console.log("Playing BGM:");
+
         bgmAudio.play();
     }
     isPlaying.value = !isPlaying.value;
@@ -603,8 +599,15 @@ async function handleAction() {
             if (indexInUserGames !== -1) {
                 const [movedGame] = userGames.value.splice(indexInUserGames, 1);
                 userGames.value.unshift(movedGame);
-                window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local")).catch(console.error);
+                window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"'))).catch(console.error);
                 selectedIndex.value = 0;
+            }
+
+            if (game.version === "0.0.2" && !await window.api.isFolderExisted(path.join(CYF_PATH.value, 'Mods', game.name.en.replace(/[\/\?<>\\:\*\|":\x00-\x1f]/g, " ")))) {
+                triggerDialog(lang.value.no_cyf_mod_found, lang.value.error);
+                game.playable = 0;
+                window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
+                return;
             }
             game.type = 'playing';
             forceRender();
@@ -616,8 +619,8 @@ async function handleAction() {
             triggerDialog(`${err}`, lang.value.error);
             activeGame.value.playable = false;
             activeGame.value.type = 'local';
-            if (activeGame.value.execution_path.includes('Create Your Frisk 0.6.6 LTS 4.exe')) await window.api.setStoreValue('cyfpath', '');
-            window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local"));
+            if (activeGame.value.version === '0.0.2') await window.api.setStoreValue('cyfpath', '');
+            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
         }
     } else if (activeGame.value.type === 'remote') {
         if (!navigator.onLine) {
@@ -625,6 +628,7 @@ async function handleAction() {
             return;
         }
         const game_temp = activeGame.value;
+
         if (game_temp.version === "0.0.2" && !CYF_PATH.value) {
             showDownloadModal.value = true;
             if (downloadProgress.hasOwnProperty("cyf")) return;
@@ -648,17 +652,17 @@ async function handleAction() {
             const url = isChinaIP.value
                 ? `https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`
                 : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`;
-            console.log("url:", url);
+
             await window.api.downloadGame(
                 url,
-                game_temp.version != "0.0.2" ? path.join(settings.value.downloadPath, game_temp.id) : path.join(CYF_PATH.value, "Mods", game_temp.id),
+                game_temp.version !== "0.0.2" ? path.join(settings.value.downloadPath, game_temp.id) : path.join(CYF_PATH.value, "Mods", game_temp.name.en.replace(/[\/\?<>\\:\*\|":\x00-\x1f]/g, " ")),
                 `${crypto.randomUUID()}.7z`,
                 game_temp.id
             );
 
             game_temp.type = 'local';
             game_temp.playable = true;
-            game_temp.execution_path = game_temp.version == "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : path.join(settings.value.downloadPath, game_temp.id, "game.exe");
+            game_temp.execution_path = path.normalize(game_temp.version == "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : path.join(settings.value.downloadPath, game_temp.id, "game.exe"));
             const existingIndex = userGames.value.findIndex(g => g.id === game_temp.id);
             if (existingIndex !== -1) {
                 userGames.value.splice(existingIndex, 1);
@@ -670,7 +674,7 @@ async function handleAction() {
             delete downloadProgress[game_temp.id];
 
             // 优化保存
-            await window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local"));
+            await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
 
             selectedIndex.value = 0;
             forceRender();
@@ -690,14 +694,44 @@ function importGame() {
     showImportTypeModal.value = true;
 }
 
-function importExeDirectly() {
+async function importExeDirectly() {
+    playSfx('confirm');
     showImportTypeModal.value = false;
     exeImportForm.name = '';
     exeImportForm.path = '';
+    exeImportForm.engine = '';
     exeImportForm.image = null;
+    exeImportForm.author = '';
     exeImportForm.imageName = lang.value.settings_image_not_chosen;
     playSfx('confirm');
     showExeImportModal.value = true;
+}
+async function importCyfMod() {
+    playSfx('confirm');
+    if (!CYF_PATH.value) {
+        showDownloadModal.value = true;
+        if (downloadProgress.hasOwnProperty("cyf")) return;
+        downloadProgress["cyf"] = 0;
+        await window.api.downloadGame(
+            isChinaIP ? "https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z" : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z`,
+            path.join(settings.value.downloadPath, "createyourfrisk"),
+            `${crypto.randomUUID()}.7z`,
+            "cyf"
+        );
+        CYF_PATH.value = path.join(settings.value.downloadPath, "createyourfrisk");
+        await window.api.setStoreValue("cyfpath", CYF_PATH.value);
+        showDownloadModal.value = false;
+        triggerDialog(lang.value.cyf_download_success, lang.value.success, 'save');
+    }
+    showImportTypeModal.value = false;
+    exeImportForm.name = '';
+    exeImportForm.author = '';
+    exeImportForm.path = '';
+    exeImportForm.engine = 'Create Your Frisk'
+    exeImportForm.image = null;
+    exeImportForm.imageName = lang.value.settings_image_not_chosen;
+    playSfx('confirm');
+    showCyfImportModal.value = true;
 }
 
 function browseExeImportPath() {
@@ -709,7 +743,15 @@ function browseExeImportPath() {
         }
     })();
 }
-
+function browseCyfImportPath() {
+    playSfx('confirm');
+    (async () => {
+        const result = await window.api.openFolder();
+        if (result) {
+            exeImportForm.path = result;
+        }
+    })();
+}
 function handleExeImportImageSelect(e: Event) {
     const input = e.target as HTMLInputElement;
     if (input.files && input.files[0]) {
@@ -720,7 +762,6 @@ function handleExeImportImageSelect(e: Event) {
 
 async function confirmExeImport() {
     if (!exeImportForm.name || !exeImportForm.path) return;
-    playSfx('save');
 
     const newGame = {
         id: `local${crypto.randomUUID()}`,
@@ -728,10 +769,10 @@ async function confirmExeImport() {
         type: 'local',
         playable: true,
         author: {
-            zh: exeImportForm.author || exeImportForm.author,
-            en: exeImportForm.author || exeImportForm.author
+            zh: exeImportForm.author,
+            en: exeImportForm.author
         },
-        engine: exeImportForm.engine || '',
+        engine: exeImportForm.engine,
         execution_path: exeImportForm.path,
         img: defaultCover
     };
@@ -742,14 +783,8 @@ async function confirmExeImport() {
             newGame.img = await readFileAsDataURL(exeImportForm.image);
         }
 
-        userGames.value.push(newGame);
-        await window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local"));
-        exeImportForm.name = '';
-        exeImportForm.author = '';
-        exeImportForm.engine = '';
-        exeImportForm.path = '';
-        exeImportForm.image = null;
-        exeImportForm.imageName = lang.value.settings_image_not_chosen;
+        userGames.value.unshift(newGame);
+        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
         showExeImportModal.value = false;
         selectedIndex.value = filteredList.value.findIndex(g => g.id === newGame.id);
         triggerDialog(lang.value.success, lang.value.success, 'save');
@@ -758,13 +793,60 @@ async function confirmExeImport() {
         triggerDialog("Import Failed", lang.value.error);
     }
 }
+async function confirmCyfImport() {
+    if (!exeImportForm.name || !exeImportForm.path) return;
+    if (/[\/\?<>\\:\*\|":\x00-\x1f]/g.test(exeImportForm.name)) {
+        triggerDialog(lang.value.cyf_import_invalid_name, lang.value.error);
+        return;
+    }
 
+
+    const newGame = {
+        id: `local${crypto.randomUUID()}`,
+        name: { en: exeImportForm.name, zh: exeImportForm.name },
+        type: 'local',
+        playable: true,
+        author: {
+            zh: exeImportForm.author,
+            en: exeImportForm.author
+        },
+        engine: exeImportForm.engine,
+        execution_path: path.normalize(path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe")),
+        img: defaultCover,
+        version: "0.0.2"
+    };
+
+    try {
+        // 优化：使用 await 处理图片读取
+        if (exeImportForm.image) {
+            newGame.img = await readFileAsDataURL(exeImportForm.image);
+        }
+        if (await window.api.isParentFolder(exeImportForm.path, path.join(CYF_PATH.value, 'Mods'))) {
+            await window.api.renameFolder(exeImportForm.path, exeImportForm.name);
+        }
+        else
+            await window.api.moveFolder(exeImportForm.path, path.join(CYF_PATH.value, 'Mods', newGame.name.en.replace(/[\/\?<>\\:\*\|":\x00-\x1f]/g, " ")));
+        userGames.value.unshift(newGame);
+        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
+        showCyfImportModal.value = false;
+        selectedIndex.value = filteredList.value.findIndex(g => g.id === newGame.id);
+        triggerDialog(lang.value.success, lang.value.success, 'save');
+    } catch (err) {
+        console.error(err);
+        triggerDialog("Import Failed", lang.value.error);
+    }
+}
 function cancelExeImport() {
     playSfx('cancel');
     showExeImportModal.value = false;
 }
+function cancelCyfImport() {
+    playSfx('cancel');
+    showCyfImportModal.value = false;
+}
 
 async function importFromAup() {
+    playSfx('confirm');
     showImportTypeModal.value = false;
     try {
         const filePath = await window.api.openFile(lang.value.name_aup, ['aup']);
@@ -818,27 +900,44 @@ async function performAupImport() {
     if (selectedAupIds.value.size === 0) return;
 
     try {
+        for (const game_temp of aupPendingGames.value)
+            if (game_temp.version === "0.0.2" && !CYF_PATH.value) {
+                showDownloadModal.value = true;
+                if (downloadProgress.hasOwnProperty("cyf")) return;
+                downloadProgress["cyf"] = 0;
+                await window.api.downloadGame(
+                    isChinaIP ? "https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z" : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z`,
+                    path.join(settings.value.downloadPath, "createyourfrisk"),
+                    `${crypto.randomUUID()}.7z`,
+                    "cyf"
+                );
+                CYF_PATH.value = path.join(settings.value.downloadPath, "createyourfrisk");
+                await window.api.setStoreValue("cyfpath", CYF_PATH.value);
+                showDownloadModal.value = false;
+                triggerDialog(lang.value.cyf_download_success, lang.value.success, 'save');
+            }
         const gamesToAdd = aupPendingGames.value.filter(g => selectedAupIds.value.has(g.id));
-        const userGamesMap = new Map(userGames.value.map(g => [g.id, g]));
+        const userGamesMap = new Map(userGames.value.map((g, index) => [g.id, index]));
         let finishedTasks = 0;
         zipProgress.value = 0;
         isImporting.value = true;
         // 并行移动文件夹
         const moveTasks = gamesToAdd.map(async (g) => {
-            const destDir = path.join(settings.value.downloadPath, g.id);
-            const newExecPath = path.join(destDir, path.basename(g.execution_path.replace(/\\/g, '/')));
+            const destDir = g.version === "0.0.2" ? path.join(CYF_PATH.value, "Mods", g.name.en) : path.join(settings.value.downloadPath, g.id);
+            const newExecPath = path.normalize(g.version === "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : path.join(destDir, path.basename(g.execution_path.replace(/\\/g, '/'))));
 
             await window.api.moveFolder(path.join(tmpAupDir.value, g.id), destDir);
 
             const newG = { ...g, execution_path: newExecPath };
-            userGamesMap.set(g.id, newG);
+            if (userGamesMap.has(g.id)) {
+                userGames.value[userGamesMap.get(g.id) as number] = newG;
+            } else {
+                userGames.value.unshift(newG);
+            }
             zipProgress.value = Math.round(++finishedTasks / gamesToAdd.length * 100);
         });
 
         await Promise.all(moveTasks);
-
-        userGames.value = [...userGamesMap.values()];
-
         const delayDelete = (path) => new Promise((resolve) => {
             setTimeout(async () => {
                 await window.api.deleteFolder(path);
@@ -848,7 +947,7 @@ async function performAupImport() {
 
         // 并行执行存储和清理
         await Promise.all([
-            window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local")),
+            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"'))),
             delayDelete(tmpAupDir.value)
         ]);
         zipProgress.value = 0;
@@ -907,6 +1006,8 @@ function performExport() {
             isExporting.value = true;
             // 优化：仅深拷贝需要导出的部分
             const gamesToExport = localUserGames.value.filter(g => selectedExportIds.value.has(g.id));
+            console.log("导出游戏:", gamesToExport);
+
             await window.api.exportGame(JSON.parse(JSON.stringify(gamesToExport)), saveDir);
             triggerDialog(lang.value.export_success, lang.value.success, 'save');
         } catch (err: any) {
@@ -927,14 +1028,12 @@ function confirmDelete() {
 function performDelete() {
     playSfx('confirm');
     let execution_path;
-    // 寻找要删除的路径
-    const gameId = activeGame.value.id;
-    const game = userGames.value.find(g => g.id === gameId);
+    const game = activeGame.value;
     if (game) execution_path = game.execution_path;
     if (game.version === "0.0.2")
-        execution_path = path.join(CYF_PATH.value, "Mods", gameId);
+        execution_path = path.join(CYF_PATH.value, "Mods", game.name.en.replace(/[\/\?<>\\:\*\|":\x00-\x1f]/g, " "));
     // 更新内存状态
-    userGames.value = userGames.value.filter(g => g.id !== gameId);
+    userGames.value = userGames.value.filter(g => g.id !== game.id);
 
     selectedIndex.value = 0;
     showConfirmDelete.value = false;
@@ -943,7 +1042,7 @@ function performDelete() {
         // 优化：删除文件和保存配置可以并行，因为内存状态已经更新了
         await Promise.all([
             execution_path ? window.api.deleteFolder(execution_path) : Promise.resolve(),
-            window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local"))
+            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')))
         ]);
     })();
 }
@@ -1061,11 +1160,11 @@ async function saveSettings() {
         // 并行保存 Settings 和 UserGames
         const saveTasks: Promise<any>[] = [];
         if (settingsUpdated) {
-            saveTasks.push(window.api.setStoreValue('settings', JSON.stringify(settings.value)));
+            saveTasks.push(window.api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value))));
         }
 
         if (gameUpdated || tasks.length > 0) { // 如果有图片更新或游戏信息变更
-            saveTasks.push(window.api.setStoreValue('userGames', JSON.stringify(userGames.value).replace("playing", "local")));
+            saveTasks.push(window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"'))));
         }
 
         await Promise.all(saveTasks);
@@ -1157,7 +1256,7 @@ const performSubmit = async () => {
     isSubmitting.value = true;
 
     // 机器人 Webhook 地址
-    const WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9c34b350-f8e9-4508-b5f9-2364eb84166c';
+    const WEBHOOK_URL = '';
 
     try {
         // --- 第一步：发送 Markdown 文字信息 ---
@@ -1256,7 +1355,7 @@ onMounted(async () => {
         }).catch((err) => { console.error(err) });
         const pCyfpath = window.api.getStoreValue('cyfpath', '');
         // 2. 等待所有本地数据返回 (这是最快的 IO 方式)
-        const pIgnoredVersion = window.api.getStoreValue('ignoredVersion', '1.1.0');
+        const pIgnoredVersion = window.api.getStoreValue('ignoredVersion', '1.2.0');
 
         const [games, savedSettings, savedIgnoredVersion, savedCyfPath] = await Promise.all([
             pGames, pSettings, pIgnoredVersion, pCyfpath
@@ -1264,6 +1363,10 @@ onMounted(async () => {
         userGames.value = games;
         settings.value = savedSettings;
         CYF_PATH.value = savedCyfPath;
+        if (!await window.api.isFolderExisted(CYF_PATH.value)) {
+            CYF_PATH.value = '';
+            window.api.setStoreValue('cyfpath', '');
+        }
         if (!settings.value.musicDirectory) {
             settings.value.musicDirectory = await window.api.getlocalpath('music');
         }
@@ -1297,7 +1400,6 @@ onMounted(async () => {
             // 即使这里慢，用户也能操作本地游戏
             const ipCheckResult = await window.api.checkIsChinaIP();
             isChinaIP.value = ipCheckResult;
-            console.log('Network Status - Is China IP:', ipCheckResult);
 
             // 2. 带有超时的 Fetch 请求
             const controller = new AbortController();
@@ -1315,14 +1417,13 @@ onMounted(async () => {
             if (res.ok) {
                 const data = await res.json();
                 GITHUB_GAMES.value = data.games;
-                CYF_GAMES.value = data.cyf_games;
                 if (data.newest_version !== currentVersion && data.newest_version !== ignoredVersion) {
                     latestVersion.value = data.newest_version;
                     updateLog.value = data.update_log || {};
                     showUpdateModal.value = true;
                 }
                 const lastReadIndex = await window.api.getStoreValue('last_announcement_index', '');
-                console.log('Last Read Index:', lastReadIndex, data.announcement?.en);
+
                 // 如果服务器公告索引不为 0 且 与本地保存的不一致，则显示弹窗
                 if (data.announcement?.en !== lastReadIndex && data.announcement?.en) {
                     announcementData.value = data.announcement || { en: '', zh: '' };
@@ -1527,6 +1628,9 @@ onMounted(async () => {
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{
                             lang.import_method_aup
                         }}</div>
+                        <div class="btn enabled" style="font-size: 1.5rem;" @click="importCyfMod">{{
+                            lang.import_method_cyf
+                        }}</div>
                         <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
                         <div class="btn" style="align-self: center;"
                             @click="showImportTypeModal = false; playSfx('cancel');">{{
@@ -1602,6 +1706,51 @@ onMounted(async () => {
                             {{ lang.ok }}
                         </div>
                         <div class="btn enabled" @click="cancelExeImport">
+                            {{ lang.settings_cancel }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
+        <Transition name="fade">
+            <div v-if="showCyfImportModal" id="exe-import-overlay">
+                <div class="settings-card">
+                    <div class="settings-title">{{ lang.import_method_exe }}</div>
+                    <div class="settings-body scrollable-settings">
+                        <label>{{ lang.settings_import_name_label }} <span style="color:red">*</span></label>
+                        <input type="text" v-model="exeImportForm.name" class="search-input"
+                            :placeholder="lang.placeholder_game_name" />
+
+                        <label>{{ lang.settings_import_author_label }}</label>
+                        <input type="text" v-model="exeImportForm.author" class="search-input"
+                            :placeholder="lang.placeholder_author" />
+
+                        <label>{{ lang.settings_game_path_label }} <span style="color:red">*</span></label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="text" v-model="exeImportForm.path" class="search-input"
+                                placeholder="/CYF/Mods/Game" style="flex:1" />
+                            <div class="btn browse-btn" @click="browseCyfImportPath">{{ lang.settings_browse }}</div>
+                        </div>
+
+                        <label>{{ lang.settings_import_image_label }}</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <label class="btn" for="import-exe-image-input" style="cursor: pointer;">
+                                {{ lang.settings_choose_image }}
+                            </label>
+                            <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">
+                                {{ exeImportForm.imageName }}
+                            </div>
+                        </div>
+                        <input type="file" id="import-exe-image-input" @change="handleExeImportImageSelect"
+                            accept=".jpg,.jpeg,.png" style="display:none" />
+                    </div>
+
+                    <div class="settings-actions">
+                        <div :class="['btn', { enabled: exeImportForm.name && exeImportForm.path, disabled: !exeImportForm.name || !exeImportForm.path }]"
+                            @click="confirmCyfImport">
+                            {{ lang.ok }}
+                        </div>
+                        <div class="btn enabled" @click="cancelCyfImport">
                             {{ lang.settings_cancel }}
                         </div>
                     </div>

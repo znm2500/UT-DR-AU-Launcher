@@ -174,7 +174,7 @@ app.whenReady().then(() => {
       // 1. 获取文件夹大小 (单位为字节)
 
       const size: any = await getSize(targetPath);
-      const HALF_GB = 512 * 1024 * 1024;
+      const HALF_GB = 720 * 1024 * 1024;
 
       if (size && size > HALF_GB) {
         // 2. 如果大于 1GB：仅删除指定的 exe 文件本体 (即 dirPath)
@@ -206,6 +206,9 @@ app.whenReady().then(() => {
     };
 
   });
+  ipcMain.handle('folder-is-existed', (_, folder_path) => {
+    return fs.existsSync(folder_path);
+  })
   ipcMain.handle('open-file', async (_, name, extensions) => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openFile'],
@@ -218,6 +221,21 @@ app.whenReady().then(() => {
     } else {
       return filePaths[0]
     }
+  });
+  ipcMain.handle('rename-directory', async (_event, oldPath, newName) => {
+    const parentDir = path.dirname(oldPath);
+    let targetPath = path.join(parentDir, newName);
+    if (fs.existsSync(targetPath)) return;
+    fs.rename(oldPath, targetPath);
+  });
+  ipcMain.handle('is-parent-dir', async (_, childPath, targetParentPath) => {
+    const actualParent = path.dirname(path.resolve(childPath));
+
+    // 2. 将目标父目录也转为绝对/标准路径
+    const normalizedTarget = path.resolve(targetParentPath);
+
+    // 3. 比较两者
+    return actualParent === normalizedTarget;
   });
   ipcMain.handle('read-bgm-files', async (_event, bgmPath) => {
     // 基础校验
@@ -301,12 +319,13 @@ app.whenReady().then(() => {
     });
 
   });
+
   ipcMain.handle('move-folder', async (_, archivePath, destDir) => {
     fs.copy(archivePath, destDir, { overwrite: true });
   })
   ipcMain.handle('export-game', async (event, gamesToExport, saveDir) => {
     const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
-
+    console.log(gamesToExport);
     // 定义权重
     const COPY_WEIGHT = 0.3;
     const ZIP_WEIGHT = 0.7;
@@ -320,10 +339,10 @@ app.whenReady().then(() => {
       const totalGames = gamesToExport.length;
 
       const copyPromises = gamesToExport.map(async (metadata) => {
-        const gameRoot = path.join(metadata.execution_path, '..');
+        const gameRoot = metadata.version === "0.0.2" ? path.join(metadata.execution_path, '..', 'Mods', metadata.name.en) : path.join(metadata.execution_path, '..');
         const gameDestDir = path.join(tempDir, metadata.id);
         await fs.ensureDir(gameDestDir);
-
+        console.log(metadata.id);
         const fileSize: any = await getSize(gameRoot);
 
         if (fileSize < 2147483648) {
@@ -341,7 +360,9 @@ app.whenReady().then(() => {
       });
 
       await Promise.all(copyPromises);
-
+      if (fs.existsSync(saveDir)) {
+        fs.unlinkSync(saveDir);
+      }
       // --- 2. 压缩阶段 ---
       return new Promise((resolve, reject) => {
         const myStream = Seven.add(saveDir, path.join(tempDir, '*'), {
