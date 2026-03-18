@@ -39,6 +39,10 @@ api.onZipProgress = (callback: (percent: number) => void) => {
 };
 api.downloadGame = (url: string, destDir: string, filename: string, gameId: string) =>
   ipcRenderer.invoke('download-and-extract', url, destDir, filename, gameId);
+api.getGithubConfigPublic = () =>
+  ipcRenderer.invoke('get-github-config-public');
+api.incrementRemoteHighscore = (gameId: string, snapshot?: { baseSha?: string, baseConfig?: any }) =>
+  ipcRenderer.invoke('increment-remote-highscore', gameId, snapshot);
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
 // just add to the DOM global.

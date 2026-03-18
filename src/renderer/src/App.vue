@@ -100,7 +100,10 @@ const I18N = {
         music: "音乐",
         no_cyf_mod_found: '未找到相应CYF模组!',
         import_method_cyf: "> 导入CYF模组 (Folder)",
-        cyf_import_invalid_name: "CYF模组含有非法字符!"
+        cyf_import_invalid_name: "CYF模组含有非法字符!",
+        group_all: "全部",
+        group_hot: "最热",
+        group_new: "最新"
     },
     en: {
         cyf_download_success: "CYF Download Success!",
@@ -187,7 +190,10 @@ const I18N = {
         music: "MUSIC",
         no_cyf_mod_found: "No corresponding CYF mod found!",
         import_method_cyf: "> IMPORT CYF MOD (Folder)",
-        cyf_import_invalid_name: "CYF mod contains invalid characters!"
+        cyf_import_invalid_name: "CYF mod contains invalid characters!",
+        group_all: "ALL",
+        group_hot: "HOT",
+        group_new: "NEW"
     }
 };
 function resetMusicPlayer() {
@@ -246,7 +252,7 @@ const searchInput = ref('');
 const GITHUB_GAMES = ref<any[]>([]);
 const CYF_PATH = ref('');
 const userGames = ref<any[]>([]);
-const currentVersion = '1.2.0';
+const currentVersion = '1.3.0';
 const latestVersion = ref('');
 const updateLog = ref<Record<string, string>>({});
 const settings = ref({
@@ -319,8 +325,11 @@ const canSubmit = computed(() => {
 const errorMessage = ref('');
 const showErrorModal = ref(false);
 const downloadProgress = reactive<{ [key: string]: number }>({});
+const remoteConfigSha = ref('');
+const remoteConfigSnapshot = ref<any>(null);
 const isSubmitting = ref(false); // 正在发送中的状态
 const COOLDOWN_MS = 60000;       // 冷却时间：30秒
+const selectedGroup = ref<'all' | 'hot' | 'new'>('all');
 // --- Computed Properties ---
 const lang = computed(() => I18N[currentLang.value] || I18N.en);
 function forceRender() {
@@ -333,6 +342,102 @@ const appBackgroundStyle = computed(() => {
     }
     return {};
 });
+
+function getRemoteCoverCandidates(gameId: string): string[] {
+    const gitcodeUrl = `https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/${gameId}.webp`;
+    const jsdelivrUrl = `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${gameId}.webp`;
+    const githubRawUrl = `https://raw.githubusercontent.com/znm2500/AU-Launcher-Repo/data/${gameId}.webp`;
+
+    return isChinaIP.value
+        ? [gitcodeUrl, jsdelivrUrl, githubRawUrl]
+        : [jsdelivrUrl, githubRawUrl, gitcodeUrl];
+}
+
+function handleCoverLoadError(game: any) {
+    const candidates = Array.isArray(game._imgCandidates) ? game._imgCandidates : [];
+    const currentIndex = Number(game._imgTryIndex ?? 0);
+    const nextIndex = currentIndex + 1;
+
+    if (nextIndex < candidates.length) {
+        game._imgTryIndex = nextIndex;
+        game.img = candidates[nextIndex];
+        return;
+    }
+
+    game.img = defaultCover;
+}
+
+const CONFIG_CACHE_KEY = 'au_launcher_remote_config_cache_v1';
+const CONFIG_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function loadRemoteConfigCache(): any | null {
+    try {
+        const raw = localStorage.getItem(CONFIG_CACHE_KEY);
+        if (!raw) return null;
+
+        const parsed = JSON.parse(raw);
+        const timestamp = Number(parsed?.timestamp ?? 0);
+        const data = parsed?.data;
+
+        if (!data || !Array.isArray(data.games)) return null;
+        if (timestamp > 0 && (Date.now() - timestamp > CONFIG_CACHE_MAX_AGE_MS)) return null;
+
+        return data;
+    } catch (err) {
+        console.warn('Failed to read config cache:', err);
+        return null;
+    }
+}
+
+function saveRemoteConfigCache(data: any) {
+    try {
+        if (!data || !Array.isArray(data.games)) return;
+        localStorage.setItem(CONFIG_CACHE_KEY, JSON.stringify({
+            timestamp: Date.now(),
+            data
+        }));
+    } catch (err) {
+        console.warn('Failed to save config cache:', err);
+    }
+}
+
+async function fetchConfigWithFallback(urls: string[]): Promise<any> {
+    let lastError: any = null;
+
+    for (const baseUrl of urls) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+        try {
+            const joiner = baseUrl.includes('?') ? '&' : '?';
+            const fetchUrl = `${baseUrl}${joiner}t=${Date.now()}`;
+
+            const res = await fetch(fetchUrl, {
+                cache: 'no-store',
+                signal: controller.signal
+            });
+
+            if (!res.ok) {
+                lastError = new Error(`Fetch returned status: ${res.status} (${baseUrl})`);
+                continue;
+            }
+
+            const data = await res.json();
+            if (!Array.isArray(data?.games)) {
+                lastError = new Error(`Invalid config format (${baseUrl})`);
+                continue;
+            }
+
+            return data;
+        } catch (err) {
+            lastError = err;
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
+
+    throw lastError || new Error('All config sources failed');
+}
 
 // 优化：fullList 计算属性
 // 这里本身逻辑不复杂，但为了避免频繁重建 Set，逻辑保持清晰即可
@@ -350,8 +455,20 @@ const fullList = computed(() => {
             if (!gameMap.has(g.id)) {
                 g.type = downloadIdSet.has(g.id) ? 'downloading' : 'remote';
                 g.playable = false;
-                // 只有在需要显示时才拼接字符串
-                g.img = false ? `https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/${g.id}.webp` : `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${g.id}.webp`;
+                const candidates = getRemoteCoverCandidates(g.id);
+                g._imgCandidates = candidates;
+
+                const hasCurrentUrl = typeof g.img === 'string' && g.img.trim() !== '';
+                const currentTryIndex = Number(g._imgTryIndex ?? 0);
+                const isCurrentUrlInCandidates = hasCurrentUrl && candidates.includes(g.img);
+
+                if (isCurrentUrlInCandidates) {
+                    g._imgTryIndex = Math.max(currentTryIndex, candidates.indexOf(g.img));
+                } else if (!hasCurrentUrl || g.img === defaultCover) {
+                    g._imgTryIndex = 0;
+                    g.img = candidates[0] || defaultCover;
+                }
+
                 g.execution_path = '';
                 gameMap.set(g.id, g);
             }
@@ -361,11 +478,64 @@ const fullList = computed(() => {
     return Array.from(gameMap.values());
 });
 
+function getHeatScore(game: any): number {
+    const score = Number(game.hot_score ?? 0);
+    return Number.isFinite(score) ? score : 0;
+}
+
+async function refreshGithubSnapshot() {
+    try {
+        const githubCfg = await window.api.getGithubConfigPublic();
+        const encodedPath = githubCfg.configPath.split('/').map(encodeURIComponent).join('/');
+        const apiUrl = `https://api.gitcode.com/api/v5/repos/${githubCfg.owner}/${githubCfg.repo}/contents/${encodedPath}?ref=${encodeURIComponent(githubCfg.branch)}`;
+        const res = await fetch(apiUrl, {
+            cache: 'no-store',
+            headers: {
+                Accept: 'application/json'
+            }
+        });
+
+        if (!res.ok) {
+            console.warn('Failed to fetch GitCode snapshot:', res.status);
+            return;
+        }
+
+        const data = await res.json();
+        const content = atob(String(data.content || '').replace(/\n/g, ''));
+        remoteConfigSnapshot.value = JSON.parse(content);
+        remoteConfigSha.value = String(data.sha || '');
+    } catch (err) {
+        console.warn('Failed to parse GitCode snapshot:', err);
+    }
+}
+
+function getPublishTime(game: any): number {
+    const raw = game.publish_time ?? '';
+    const parsed = Date.parse(String(raw));
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+const groupedList = computed(() => {
+    const list = [...fullList.value];
+
+    if (selectedGroup.value === 'hot') {
+        list.sort((a, b) => getHeatScore(b) - getHeatScore(a));
+        return list;
+    }
+
+    if (selectedGroup.value === 'new') {
+        list.sort((a, b) => getPublishTime(b) - getPublishTime(a));
+        return list;
+    }
+
+    return list;
+});
+
 const filteredList = computed(() => {
     const query = searchInput.value.toLowerCase();
-    if (!query.trim()) return fullList.value;
+    if (!query.trim()) return groupedList.value;
 
-    return fullList.value.filter(g => {
+    return groupedList.value.filter(g => {
         // 1. 匹配名称 (多语言)
         if (g.name) {
             for (const name of Object.values(g.name)) {
@@ -585,6 +755,11 @@ watch(searchInput, () => {
     selectedIndex.value = 0;
 });
 
+watch(selectedGroup, () => {
+    visibleCount.value = 5;
+    selectedIndex.value = 0;
+});
+
 async function handleAction() {
     if ((!activeGame.value) || (activeGame.value.type === 'local' && !activeGame.value.playable) || (activeGame.value.type === 'downloading') || (activeGame.value.type === 'playing')) return;
 
@@ -675,6 +850,30 @@ async function handleAction() {
 
             // 优化保存
             await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
+            if (isChinaIP.value) {
+                const bumpResult = await window.api.incrementRemoteHighscore(game_temp.id, {
+                    baseSha: remoteConfigSha.value,
+                    baseConfig: remoteConfigSnapshot.value
+                });
+                if (!bumpResult?.ok) {
+                    console.warn('Remote highscore update failed:', bumpResult?.error || 'unknown error');
+                } else {
+                    if (bumpResult.sha) {
+                        remoteConfigSha.value = bumpResult.sha;
+                    }
+                    if (remoteConfigSnapshot.value?.games) {
+                        const idx = remoteConfigSnapshot.value.games.findIndex((g: any) => g?.id === game_temp.id);
+                        if (idx !== -1) {
+                            const current = remoteConfigSnapshot.value.games[idx];
+                            const nextScore = Number(current.hot_score ?? 0) + 1;
+                            remoteConfigSnapshot.value.games[idx] = {
+                                ...current,
+                                hot_score: nextScore
+                            };
+                        }
+                    }
+                }
+            }
 
             selectedIndex.value = 0;
             forceRender();
@@ -1355,7 +1554,7 @@ onMounted(async () => {
         }).catch((err) => { console.error(err) });
         const pCyfpath = window.api.getStoreValue('cyfpath', '');
         // 2. 等待所有本地数据返回 (这是最快的 IO 方式)
-        const pIgnoredVersion = window.api.getStoreValue('ignoredVersion', '1.2.0');
+        const pIgnoredVersion = window.api.getStoreValue('ignoredVersion', '1.3.0');
 
         const [games, savedSettings, savedIgnoredVersion, savedCyfPath] = await Promise.all([
             pGames, pSettings, pIgnoredVersion, pCyfpath
@@ -1394,6 +1593,11 @@ onMounted(async () => {
     // 第二阶段：后台处理网络数据 (Network Background)
     // 不使用 await 阻塞 onMounted，让它在后台跑，不影响 UI 响应
     // ============================================================
+    const cachedConfig = loadRemoteConfigCache();
+    if (cachedConfig) {
+        GITHUB_GAMES.value = cachedConfig.games;
+    }
+
     (async () => {
         try {
             // 1. 检测 IP (后端已做防崩溃处理)
@@ -1401,39 +1605,35 @@ onMounted(async () => {
             const ipCheckResult = await window.api.checkIsChinaIP();
             isChinaIP.value = ipCheckResult;
 
-            // 2. 带有超时的 Fetch 请求
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时
+            const configCandidates = isChinaIP.value
+                ? [
+                    'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/config.json',
+                    'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json',
+                    'https://raw.githubusercontent.com/znm2500/AU-Launcher-Repo/data/config.json'
+                ]
+                : [
+                    'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json',
+                    'https://raw.githubusercontent.com/znm2500/AU-Launcher-Repo/data/config.json',
+                    'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/config.json'
+                ];
 
-            const configUrl = isChinaIP.value ? 'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/config.json' : 'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json';
+            const data = await fetchConfigWithFallback(configCandidates);
+            GITHUB_GAMES.value = data.games;
+            saveRemoteConfigCache(data);
 
-            const res = await fetch(configUrl, {
-                cache: 'no-store',
-                signal: controller.signal // 绑定超时信号
-            });
+            await refreshGithubSnapshot();
+            if (data.newest_version !== currentVersion && data.newest_version !== ignoredVersion) {
+                latestVersion.value = data.newest_version;
+                updateLog.value = data.update_log || {};
+                showUpdateModal.value = true;
+            }
+            const lastReadIndex = await window.api.getStoreValue('last_announcement_index', '');
 
-            clearTimeout(timeoutId); // 请求成功，清除定时器
-
-            if (res.ok) {
-                const data = await res.json();
-                GITHUB_GAMES.value = data.games;
-                if (data.newest_version !== currentVersion && data.newest_version !== ignoredVersion) {
-                    latestVersion.value = data.newest_version;
-                    updateLog.value = data.update_log || {};
-                    showUpdateModal.value = true;
-                }
-                const lastReadIndex = await window.api.getStoreValue('last_announcement_index', '');
-
-                // 如果服务器公告索引不为 0 且 与本地保存的不一致，则显示弹窗
-                if (data.announcement?.en !== lastReadIndex && data.announcement?.en) {
-                    announcementData.value = data.announcement || { en: '', zh: '' };
-                    showAnnouncement.value = true;
-                    announcementIndex = data.announcement?.en;
-                }
-
-
-            } else {
-                console.warn(`Fetch returned status: ${res.status}`);
+            // 如果服务器公告索引不为 0 且 与本地保存的不一致，则显示弹窗
+            if (data.announcement?.en !== lastReadIndex && data.announcement?.en) {
+                announcementData.value = data.announcement || { en: '', zh: '' };
+                showAnnouncement.value = true;
+                announcementIndex = data.announcement?.en;
             }
 
         } catch (error: any) {
@@ -1456,6 +1656,21 @@ onMounted(async () => {
             <input type="text" v-model="searchInput" class="search-input" :placeholder="lang.search" />
             <div class="submit-btn" @click="openSubmitLink">
                 {{ lang.submit }}
+            </div>
+        </div>
+
+        <div class="group-tabs">
+            <div :class="['group-tab', { active: selectedGroup === 'all' }]"
+                @click="playSfx('switch'); selectedGroup = 'all'">
+                {{ lang.group_all }}
+            </div>
+            <div :class="['group-tab', { active: selectedGroup === 'hot' }]"
+                @click="playSfx('switch'); selectedGroup = 'hot'">
+                {{ lang.group_hot }}
+            </div>
+            <div :class="['group-tab', { active: selectedGroup === 'new' }]"
+                @click="playSfx('switch'); selectedGroup = 'new'">
+                {{ lang.group_new }}
             </div>
         </div>
 
@@ -1493,7 +1708,7 @@ onMounted(async () => {
                         </div>
                     </div>
                 </div>
-                <img :src="game.img" class="card-cover" draggable="false" />
+                <img :src="game.img" class="card-cover" draggable="false" @error="handleCoverLoadError(game)" />
             </div>
 
             <div v-if="visibleCount < filteredList.length" class="load-more-btn" @click="loadMore">
@@ -2268,6 +2483,39 @@ onMounted(async () => {
     /* 核心：为按钮提供定位基准 */
 }
 
+.group-tabs {
+    position: fixed;
+    left: 20px;
+    top: 150px;
+    z-index: 120;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.group-tab {
+    min-width: 108px;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.9);
+    border: 5px solid #666;
+    color: #aaa;
+    padding: 8px 16px;
+    font-size: 1.1rem;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.group-tab:hover {
+    border-color: #ffff00;
+    color: #ffff00;
+}
+
+.group-tab.active {
+    border-color: #ffffff;
+    color: #ffffff;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.25);
+}
+
 /* 说明输入框的基础样式 */
 .submit-textarea {
     width: 100%;
@@ -2344,6 +2592,16 @@ onMounted(async () => {
 
 /* 适配窄屏 */
 @media (max-width: 1100px) {
+    .group-tabs {
+        position: static;
+        width: 95%;
+        max-width: 1200px;
+        flex-direction: row;
+        justify-content: center;
+        gap: 12px;
+        margin-top: 12px;
+    }
+
     .search-input {
         width: 50%;
         /* 屏幕缩小时自动变窄 */
@@ -2354,6 +2612,16 @@ onMounted(async () => {
     .top-bar {
         flex-direction: column;
         gap: 20px;
+    }
+
+    .group-tabs {
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .group-tab {
+        min-width: 92px;
+        font-size: 0.95rem;
     }
 
     .submit-btn {

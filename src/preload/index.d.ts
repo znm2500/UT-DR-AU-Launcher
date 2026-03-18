@@ -23,7 +23,9 @@ declare global {
       getBgmFiles: (bgmPath: string) => Promise<string[]>,
       isFolderExisted: (folder_path: string) => Promise<boolean>,
       isParentFolder: (childPath: string, targetParentPath: string) => Promise<boolean>,
-      renameFolder: (oldPath: string, newName: string) => Promise<void>
+      renameFolder: (oldPath: string, newName: string) => Promise<void>,
+      getGithubConfigPublic: () => Promise<{ owner: string, repo: string, branch: string, configPath: string }>,
+      incrementRemoteHighscore: (gameId: string, snapshot?: { baseSha?: string, baseConfig?: any }) => Promise<{ ok: boolean, score?: number, sha?: string, error?: string }>
     }
   }
 }

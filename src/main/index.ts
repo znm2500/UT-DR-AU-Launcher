@@ -66,6 +66,88 @@ async function extract7z(archivePath, outputDir) {
   });
 }
 
+function getGitcodeConfig() {
+  return {
+    owner: 'znm1145',
+    repo: 'AU-Launcher-Repo',
+    branch: 'data',
+    configPath: 'config.json',
+    token: "ZNzRgfc8kf3PAxezKQ77dkyb"
+  };
+}
+
+type GithubSnapshot = {
+  baseSha?: string,
+  baseConfig?: any
+};
+
+async function incrementGithubGameHighscore(gameId: string, snapshot?: GithubSnapshot): Promise<{ score: number, sha: string }> {
+  const { owner, repo, branch, configPath, token } = getGitcodeConfig();
+  if (!token) {
+    throw new Error('Missing GitCode token. Set gitcodeToken or env GITCODE_TOKEN.');
+  }
+
+  const encodedPath = configPath.split('/').map(encodeURIComponent).join('/');
+  const apiUrl = `https://api.gitcode.com/api/v5/repos/${owner}/${repo}/contents/${encodedPath}`;
+  const headers = {
+    Accept: 'application/json'
+  };
+
+  let parsed = snapshot?.baseConfig;
+  let baseSha = String(snapshot?.baseSha || '');
+
+  // 前端未提供快照时回退到主进程拉取，保证兼容旧调用。
+  if (!parsed || !baseSha) {
+    const getRes = await axios.get(apiUrl, {
+      headers,
+      params: { ref: branch, access_token: token },
+      timeout: 15000
+    });
+    const remote = getRes.data;
+    const content = Buffer.from(String(remote.content || '').replace(/\n/g, ''), 'base64').toString('utf8');
+    parsed = JSON.parse(content);
+    baseSha = String(remote.sha || '');
+  }
+
+  if (!baseSha) {
+    throw new Error('Missing base sha for GitCode content update.');
+  }
+
+  const games = Array.isArray(parsed.games) ? parsed.games : [];
+  const index = games.findIndex((g: any) => g?.id === gameId);
+
+  if (index === -1) {
+    throw new Error(`Game not found in remote config: ${gameId}`);
+  }
+
+  const game = { ...games[index] };
+  const prev = Number(game.hot_score ?? 0);
+  const next = (Number.isFinite(prev) ? prev : 0) + 1;
+
+  game.hot_score = next;
+
+  games[index] = game;
+  parsed.games = games;
+
+  const updatedContent = Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, 'utf8').toString('base64');
+
+  const putRes = await axios.put(apiUrl, {
+    message: `chore: bump hot_score for ${gameId}`,
+    content: updatedContent,
+    sha: baseSha,
+    branch
+  }, {
+    headers,
+    params: { access_token: token },
+    timeout: 15000
+  });
+
+  return {
+    score: next,
+    sha: String(putRes.data?.content?.sha || '')
+  };
+}
+
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
@@ -281,6 +363,19 @@ app.whenReady().then(() => {
       return true;
     } catch (error) {
       throw error;
+    }
+  });
+  ipcMain.handle('get-github-config-public', () => {
+    const { owner, repo, branch, configPath } = getGitcodeConfig();
+    return { owner, repo, branch, configPath };
+  });
+  ipcMain.handle('increment-remote-highscore', async (_event, gameId: string, snapshot?: GithubSnapshot) => {
+    try {
+      const result = await incrementGithubGameHighscore(gameId, snapshot);
+      return { ok: true, score: result.score, sha: result.sha };
+    } catch (error: any) {
+      console.warn('Failed to increment remote highscore:', error);
+      return { ok: false, error: error?.message || String(error) };
     }
   });
   ipcMain.handle('get-store-value', (_, key, value) => {
