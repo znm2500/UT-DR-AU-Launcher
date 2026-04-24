@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import soulIcon from './assets/spr_soul.png'
 import defaultCover from './assets/default_cover.webp'
 import path from 'path-browserify';
@@ -1532,10 +1532,16 @@ const performSubmit = async () => {
         isSubmitting.value = false;
     }
 };
+
+const preventDefaultContextMenu = (event: MouseEvent) => {
+    event.preventDefault();
+};
 // --- Lifecycle ---
 // --- App.vue ---
 
 onMounted(async () => {
+    window.addEventListener('contextmenu', preventDefaultContextMenu);
+
     try {
         // 0. 初始化基础功能
         initSfx();
@@ -1652,6 +1658,10 @@ onMounted(async () => {
             }
         }
     })();
+});
+
+onUnmounted(() => {
+    window.removeEventListener('contextmenu', preventDefaultContextMenu);
 });
 
 </script>
@@ -1841,7 +1851,7 @@ onMounted(async () => {
             <div v-if="showImportTypeModal" id="import-type-overlay">
                 <div class="confirm-card" style="width: 480px;">
                     <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title
-                    }} ]
+                        }} ]
                     </div>
                     <div class="confirm-actions"
                         style="flex-direction: column; align-items: flex-start; gap: 20px; padding: 0 20px;">
@@ -1849,10 +1859,10 @@ onMounted(async () => {
                             lang.import_method_exe }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{
                             lang.import_method_aup
-                        }}</div>
+                            }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importCyfMod">{{
                             lang.import_method_cyf
-                        }}</div>
+                            }}</div>
                         <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
                         <div class="btn" style="align-self: center;"
                             @click="showImportTypeModal = false; playSfx('cancel');">{{
@@ -2088,7 +2098,7 @@ onMounted(async () => {
                                 :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
                                 @click="toggleExportSelection(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
-                                }}</span>
+                                    }}</span>
                                 {{ g.name[currentLang] || g.name['en'] }}
                             </div>
                         </div>
@@ -2122,10 +2132,10 @@ onMounted(async () => {
                         <div style="display:flex;gap:8px;align-items:center;">
                             <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
                                 lang.settings_choose_image
-                            }}</label>
+                                }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                                 settingsForm.bgImageName
-                            }}</div>
+                                }}</div>
                         </div>
                         <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
