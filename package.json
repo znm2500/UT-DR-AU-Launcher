@@ -1,107 +1,43 @@
 {
   "name": "au-launcher",
   "version": "1.3.0",
-  "description": "A UNDERTALE/Deltarune Alternate Universe (AUs) games launcher built with Vue.js and Electron",
-  "main": "./out/main/index.js",
+  "description": "A UNDERTALE/Deltarune Alternate Universe (AUs) games launcher built with Vue.js and Tauri",
   "author": "znm <znm2500@163.com>",
   "homepage": "https://github.com/znm2500/UT-DR-AU-Launcher",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
-    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json --composite false",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "start": "electron-vite preview",
-    "dev": "electron-vite dev",
-    "build": "npm run typecheck && electron-vite build",
-    "postinstall": "electron-builder install-app-deps",
-    "build:unpack": "npm run build && electron-builder --dir --win",
-    "build:win": "npm run build && electron-builder --ia32 --x64",
-    "build:mac": "npm run build && electron-builder --mac",
-    "build:linux": "npm run build && electron-builder --linux"
+    "typecheck": "npm run typecheck:web",
+    "dev:web": "vite",
+    "dev": "tauri dev",
+    "build:web": "npm run typecheck && vite build",
+    "build": "npm run build:web",
+    "build:tauri": "tauri build"
   },
   "dependencies": {
-    "@electron-toolkit/preload": "^3.0.2",
-    "@electron-toolkit/utils": "^4.0.0",
-    "7zip-bin": "^5.2.0",
-    "adm-zip": "^0.5.16",
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-dialog": "^2.4.2",
+    "@tauri-apps/plugin-store": "^2.4.1",
     "axios": "^1.13.4",
-    "electron-store": "^8.1.0",
-    "fast-folder-size": "^2.4.0",
-    "fs-extra": "^11.3.3",
-    "ip2region-ts": "^2.0.1",
-    "node-7z": "^3.0.0",
     "path-browserify": "^1.0.1",
-    "public-ip": "^8.0.0",
     "spark-md5": "^3.0.2"
   },
   "devDependencies": {
-    "@electron-toolkit/eslint-config-prettier": "3.0.0",
-    "@electron-toolkit/eslint-config-ts": "^3.1.0",
-    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@eslint/js": "^9.39.1",
+    "@tauri-apps/cli": "^2.8.1",
+    "@typescript-eslint/eslint-plugin": "^8.46.2",
+    "@typescript-eslint/parser": "^8.46.2",
     "@types/node": "^22.19.1",
     "@vitejs/plugin-vue": "^6.0.2",
-    "electron": "^39.2.6",
-    "electron-builder": "^26.0.12",
-    "electron-vite": "^5.0.0",
     "eslint": "^9.39.1",
     "eslint-plugin-vue": "^10.6.2",
+    "globals": "^16.5.0",
     "prettier": "^3.7.4",
     "typescript": "^5.9.3",
     "vite": "^7.2.6",
     "vue": "^3.5.25",
     "vue-eslint-parser": "^10.2.0",
     "vue-tsc": "^3.1.6"
-  },
-  "build": {
-    "appId": "com.au.launcher",
-    "productName": "AU Launcher",
-    "executableName": "AU Launcher",
-    "asar": false,
-    "directories": {
-      "output": "release",
-      "buildResources": "build"
-    },
-    "files": [
-      "out/**/*",
-      "node_modules/**/*",
-      "package.json"
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "build/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "allowElevation": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "AU Launcher",
-      "artifactName": "${productName}-v${version}-Setup-${arch}.${ext}"
-    },
-    "mac": {
-      "category": "public.app-category.games",
-      "icon": "build/icon.icns",
-      "target": [
-        "dmg"
-      ]
-    },
-    "linux": {
-      "target": [
-        "deb",
-        "rpm"
-      ],
-      "category": "Game",
-      "icon": "build/icons",
-      "artifactName": "${productName}-v${version}-Linux-${arch}.${ext}"
-    }
   }
 }

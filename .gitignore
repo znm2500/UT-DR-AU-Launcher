@@ -1,7 +1,9 @@
-node_modules
-dist
-out
-release
+node_modules/
+dist/
+out/
+src-tauri/target/
+src-tauri/gen/
+release/
 .DS_Store
 .eslintcache
 *.log*

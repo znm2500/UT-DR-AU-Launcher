@@ -1,8 +1,17 @@
 {
-  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
-  "include": ["electron.vite.config.*", "src/main/**/*", "src/preload/**/*"],
   "compilerOptions": {
     "composite": true,
-    "types": ["electron-vite/node"]
-  }
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": ["vite.config.ts"],
+  "exclude": ["src/main/**/*", "src/preload/**/*"],
+  "references": [
+    {
+      "path": "./tsconfig.web.json"
+    }
+  ]
 }
