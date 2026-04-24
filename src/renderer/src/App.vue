@@ -3,6 +3,7 @@ import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
 import soulIcon from './assets/spr_soul.png'
 import defaultCover from './assets/default_cover.webp'
 import path from 'path-browserify';
+import { convertFileSrc } from '@tauri-apps/api/core'
 import confirmWav from './assets/sfx/confirm.wav'
 import cancelWav from './assets/sfx/cancel.wav'
 import switchWav from './assets/sfx/switch.wav'
@@ -653,15 +654,38 @@ function toggleBgmPanel() {
     showBgmPanel.value = !showBgmPanel.value;
 }
 
-function playBgm(index: number) {
+function resolveBgmSrc(rawPath: string): string {
+    if (!rawPath) return '';
+
+    // Tauri WebView 里优先用官方转换，避免 Windows 本地路径被 file:// 解析错误。
+    try {
+        return convertFileSrc(rawPath);
+    } catch {
+        const normalized = rawPath.replace(/\\/g, '/');
+        const withLeadingSlash = normalized.startsWith('/') ? normalized : `/${normalized}`;
+        return encodeURI(`file://${withLeadingSlash}`);
+    }
+}
+
+async function playBgm(index: number) {
     if (index < 0 || index >= bgmList.value.length) return;
 
     currentBgmIndex.value = index;
-    // 获取完整路径，如果是 Electron 环境通常需要 file:// 协议或后端处理
-    bgmAudio.src = `file://${bgmList.value[index]}`;
-    bgmAudio.play();
-    isPlaying.value = true;
-    playSfx('confirm');
+    currentTime.value = 0;
+    duration.value = 0;
+
+    const audioSrc = resolveBgmSrc(bgmList.value[index]);
+    bgmAudio.src = audioSrc;
+    bgmAudio.load();
+
+    try {
+        await bgmAudio.play();
+        isPlaying.value = true;
+        playSfx('confirm');
+    } catch (err) {
+        isPlaying.value = false;
+        console.error('BGM play failed:', err, audioSrc);
+    }
 }
 
 function togglePlay() {
@@ -792,7 +816,11 @@ async function handleAction() {
 
         } catch (err: any) {
             triggerDialog(`${err}`, lang.value.error);
-            activeGame.value.playable = false;
+            const errMessage = String(err ?? '');
+            const isAlreadyRunning = errMessage.includes('游戏已在运行中') || errMessage.toLowerCase().includes('already running');
+            if (!isAlreadyRunning) {
+                activeGame.value.playable = false;
+            }
             activeGame.value.type = 'local';
             if (activeGame.value.version === '0.0.2') await window.api.setStoreValue('cyfpath', '');
             window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
@@ -1205,7 +1233,6 @@ function performExport() {
             isExporting.value = true;
             // 优化：仅深拷贝需要导出的部分
             const gamesToExport = localUserGames.value.filter(g => selectedExportIds.value.has(g.id));
-            console.log("导出游戏:", gamesToExport);
 
             await window.api.exportGame(JSON.parse(JSON.stringify(gamesToExport)), saveDir);
             triggerDialog(lang.value.export_success, lang.value.success, 'save');
@@ -1304,7 +1331,6 @@ async function saveSettings() {
             if (activeGame.value.type === 'local') {
                 // 名字修改
                 if (activeGame.value.name[currentLang.value] !== settingsForm.name) {
-                    console.log(currentLang.value);
                     activeGame.value.name[currentLang.value] = settingsForm.name;
                     gameUpdated = true;
                 }
@@ -1454,40 +1480,18 @@ const performSubmit = async () => {
     if (isSubmitting.value) return;
     isSubmitting.value = true;
 
-    // 机器人 Webhook 地址
-    const WEBHOOK_URL = '';
-
     try {
-        // --- 第一步：发送 Markdown 文字信息 ---
-        const textMsg = {
-            msgtype: "markdown",
-            markdown: {
-                content: `### 🎮 收到新的游戏申请\n` +
-                    `> **游戏名称**：<font color="info">${submitForm.name}</font>\n` +
-                    `> **下载链接**：[点击查看](${submitForm.link})\n` +
-                    `> **补充说明**：${submitForm.desc || '无'}\n` +
-                    `> **提交时间**：${new Date().toLocaleString()}`
-            }
-        };
+        let imageBase64 = '';
+        let imageMd5 = '';
 
-        const res = await fetch(WEBHOOK_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(textMsg)
-        });
-
-        if (!res.ok) throw new Error('Text message failed');
-
-        // --- 第二步：处理并发送图片 (如果有) ---
-        // 只有当图片存在，且不是默认占位符时才发送
+        // 只有当图片存在，且不是默认占位符时才发送图片
         if (submitForm.img && submitForm.imgName !== lang.value.settings_image_not_chosen) {
-
             const arrayBuffer = await submitForm.img.arrayBuffer();
 
             // 计算图片 MD5 (企业微信要求)
             const spark = new SparkMD5.ArrayBuffer();
             spark.append(arrayBuffer);
-            const md5 = spark.end();
+            imageMd5 = spark.end();
 
             // 转 Base64
             const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
@@ -1498,22 +1502,17 @@ const performSubmit = async () => {
                 }
                 return window.btoa(binary);
             };
-            const base64 = arrayBufferToBase64(arrayBuffer);
-
-            const imgResponse = await fetch(WEBHOOK_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    msgtype: "image",
-                    image: {
-                        base64: base64,
-                        md5: md5
-                    }
-                })
-            });
-
-            if (!imgResponse.ok) throw new Error('Image upload failed');
+            imageBase64 = arrayBufferToBase64(arrayBuffer);
         }
+
+        await window.api.submitGameApplication({
+            name: submitForm.name,
+            link: submitForm.link,
+            desc: submitForm.desc,
+            submitTime: new Date().toLocaleString(),
+            imageBase64,
+            imageMd5
+        });
 
         // --- 第三步：成功处理 ---
         // 记录本次成功提交的时间到本地
@@ -1522,9 +1521,12 @@ const performSubmit = async () => {
         showSubmitModal.value = false; // 关闭弹窗
         triggerDialog(lang.value.submit_success, lang.value.success, 'save');
 
-    } catch (error) {
+    } catch (error: any) {
         console.error('推送失败:', error);
-        triggerDialog(lang.value.submit_failed, lang.value.error, 'error');
+        const detail = typeof error === 'string'
+            ? error
+            : (error?.message || error?.toString?.() || 'unknown error');
+        triggerDialog(`${lang.value.submit_failed} ${detail}`, lang.value.error, 'error');
     } finally {
         // 解锁按钮
         isSubmitting.value = false;
@@ -1580,6 +1582,11 @@ onMounted(async () => {
         bgmAudio.addEventListener('loadedmetadata', () => {
             duration.value = bgmAudio.duration;
         });
+
+        bgmAudio.addEventListener('error', () => {
+            console.error('BGM audio load error:', bgmAudio.currentSrc, bgmAudio.error);
+        });
+
         // 设置循环播放
         bgmAudio.onended = () => nextTrack();
         ignoredVersion = savedIgnoredVersion; // 赋值
@@ -1768,8 +1775,8 @@ onMounted(async () => {
             <div :class="['btn', { enabled: activeGame && activeGame.type === 'local', disabled: !activeGame || activeGame.type !== 'local' }]"
                 @click="confirmDelete">{{ lang.delete }}</div>
             <div :class="['btn', 'main', {
-                enabled: activeGame && !activeGame.playing,
-                disabled: !activeGame || activeGame.playing,
+                enabled: activeGame && activeGame.type !== 'playing',
+                disabled: !activeGame || activeGame.type === 'playing',
                 downloading: activeGame?.type === 'downloading',
                 playing: activeGame?.type === 'playing'
             }]" @click="handleAction">
@@ -2224,6 +2231,7 @@ onMounted(async () => {
     --highlight-color: #FFFF00;
     --soul-color: #FF0000;
     --dim-text: #777777;
+    --panel-bg: rgba(0, 0, 0, 0.88);
 }
 
 #app {
@@ -2292,7 +2300,7 @@ onMounted(async () => {
     bottom: 50px;
     right: 0;
     width: 300px;
-    background: black;
+    background: var(--panel-bg);
     border: 5px solid white;
     padding: 10px;
     box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
@@ -2562,6 +2570,11 @@ onMounted(async () => {
     outline: none;
     text-align: center;
     /* 文字居中，符合 Undertale 审美 */
+    transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.search-input:focus {
+    border-color: var(--highlight-color);
 }
 
 /* 右上角按钮 - 风格完全同步搜索框 */
@@ -2580,7 +2593,7 @@ onMounted(async () => {
     padding: 8px 15px;
     cursor: pointer;
     white-space: nowrap;
-    transition: all 0.1s;
+    transition: border-color 0.1s ease, color 0.1s ease;
 }
 
 /* 悬停效果 */
@@ -2648,6 +2661,8 @@ onMounted(async () => {
     margin: 20px 0;
     overflow-y: auto;
     padding-right: 15px;
+    padding-bottom: 12px;
+    scroll-behavior: smooth;
 }
 
 .game-card {
@@ -2661,6 +2676,12 @@ onMounted(async () => {
     width: 900px;
     box-sizing: border-box;
     flex-shrink: 0;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.game-card:hover:not(.selected) {
+    border-color: #666;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.1);
 }
 
 .game-card.selected {
@@ -2763,14 +2784,16 @@ onMounted(async () => {
     border-top: 5px solid white;
     display: flex;
     justify-content: center;
+    flex-wrap: wrap;
     gap: 40px;
     font-size: 1.6rem;
-    background: black;
+    background: rgba(0, 0, 0, 0.95);
 }
 
 .btn {
     cursor: pointer;
     color: var(--dim-text);
+    transition: color 0.1s ease;
 }
 
 .btn:hover {
@@ -2957,6 +2980,19 @@ onMounted(async () => {
     display: flex;
     flex-direction: column;
     gap: 12px;
+}
+
+.settings-card .btn,
+.confirm-card .btn,
+.error-card .btn {
+    border: 3px solid transparent;
+    padding: 2px 8px;
+}
+
+.settings-card .btn:hover,
+.confirm-card .btn:hover,
+.error-card .btn:hover {
+    border-color: var(--highlight-color);
 }
 
 /* 确保弹窗内的 input 宽度能够随容器自适应 */
@@ -3160,5 +3196,52 @@ onMounted(async () => {
 .changelog-container::-webkit-scrollbar,
 .bgm-list::-webkit-scrollbar {
     width: 6px;
+}
+
+@media (max-width: 1200px) {
+    #game-list {
+        max-width: 100%;
+        padding-right: 8px;
+    }
+
+    .game-card {
+        width: calc(100% - 40px);
+    }
+}
+
+@media (max-width: 700px) {
+    .search-input {
+        font-size: 1.15rem;
+        padding: 10px 12px;
+    }
+
+    .group-tabs {
+        width: calc(100% - 20px);
+        gap: 8px;
+    }
+
+    .group-tab {
+        min-width: 84px;
+        padding: 6px 10px;
+    }
+
+    .game-card {
+        height: 220px;
+    }
+
+    .info-box .name {
+        font-size: 1.5rem;
+    }
+
+    .footer {
+        gap: 18px;
+        font-size: 1.2rem;
+        padding: 12px 10px;
+    }
+
+    .bgm-player-fixed {
+        bottom: 92px;
+        right: 10px;
+    }
 }
 </style>

@@ -6,8 +6,6 @@ import { electronAPI } from '@electron-toolkit/preload'
 // Custom APIs for renderer
 const api: any = {};
 
-
-console.log('--- Preload 脚本正在加载 ---');
 // Expose a safe API to get game data (uses cache via electron-store)
 
 api.openFile = (custom_name, extensions) => ipcRenderer.invoke('open-file', custom_name, extensions);

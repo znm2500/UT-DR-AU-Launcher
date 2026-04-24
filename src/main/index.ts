@@ -208,8 +208,6 @@ app.whenReady().then(() => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
   ipcMain.handle('check-local-ip-region', async () => {
     try {
       // 尝试获取公网 IP，设置超时防止卡死
@@ -379,7 +377,6 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.handle('get-store-value', (_, key, value) => {
-    console.log(store.get(key, value));
     return store.get(key, value);
   })
   ipcMain.handle('set-store-value', (_, key, value) => {
@@ -420,7 +417,6 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('export-game', async (event, gamesToExport, saveDir) => {
     const tempDir = path.join(app.getPath('temp'), `au_export_${Date.now()}_${Math.random()}`);
-    console.log(gamesToExport);
     // 定义权重
     const COPY_WEIGHT = 0.3;
     const ZIP_WEIGHT = 0.7;
@@ -437,7 +433,6 @@ app.whenReady().then(() => {
         const gameRoot = metadata.version === "0.0.2" ? path.join(metadata.execution_path, '..', 'Mods', metadata.name.en) : path.join(metadata.execution_path, '..');
         const gameDestDir = path.join(tempDir, metadata.id);
         await fs.ensureDir(gameDestDir);
-        console.log(metadata.id);
         const fileSize: any = await getSize(gameRoot);
 
         if (fileSize < 2147483648) {

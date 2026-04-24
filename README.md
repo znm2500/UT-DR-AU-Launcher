@@ -1,6 +1,6 @@
 # UT/DR AU Launcher
 
-A modern, feature-rich game launcher designed for *UNDERTALE* and *Deltarune* Alternate Universe (AU) games. Built with Electron, Vue 3, and Vite, it provides a unified interface to manage, play, and share your favorite AU games.
+A modern, feature-rich game launcher designed for *UNDERTALE* and *Deltarune* Alternate Universe (AU) games. Built with Tauri, Vue 3, and Vite, it provides a unified interface to manage, play, and share your favorite AU games.
 
 ## Core Features
 
@@ -34,20 +34,27 @@ A modern, feature-rich game launcher designed for *UNDERTALE* and *Deltarune* Al
 
 ## Tech Stack
 
-- **Frameworks**: Electron, Vue.js 3
+- **Frameworks**: Tauri 2, Vue.js 3
 - **Build Tool**: Vite
 - **Key Dependencies**:
   - `axios`: For network requests and game downloads.
-  - `node-7z` / `adm-zip`: For handling `.7z` and `.zip` archives.
-  - `electron-store`: For persistent storage of user settings and game library data.
-  - `fs-extra`: For enhanced file system operations.
+  - `@tauri-apps/api`: For frontend-to-native command invocation and path/dialog access.
+  - `@tauri-apps/plugin-dialog` / `@tauri-apps/plugin-store`: For native dialogs and persistent local settings.
+  - Rust side (`reqwest`, `zip`, `sevenz-rust`): For download, extraction, and export workflows.
 
 ---
+
+## Recent Cleanup
+
+- Removed low-value debug logs and test IPC leftovers in legacy Electron bridge files.
+- Removed duplicated Rust error mapping in game launch flow.
+- Kept behavior unchanged while reducing noise for future maintenance.
+
 ---
 
 # UT/DR AU 启动器
 
-一个为《UNDERTALE》和《Deltarune》的同人游戏（AUs - Alternate Universes）设计的现代化、功能丰富的游戏启动器。它使用 Electron、Vue 3 和 Vite 构建，提供了一个统一的界面来管理、游玩和分享你喜爱的 AU 游戏。
+一个为《UNDERTALE》和《Deltarune》的同人游戏（AUs - Alternate Universes）设计的现代化、功能丰富的游戏启动器。它使用 Tauri、Vue 3 和 Vite 构建，提供了一个统一的界面来管理、游玩和分享你喜爱的 AU 游戏。
 
 ## 核心功能
 
@@ -81,10 +88,18 @@ A modern, feature-rich game launcher designed for *UNDERTALE* and *Deltarune* Al
 
 ## 技术栈
 
-- **框架**: Electron, Vue.js 3
+- **框架**: Tauri 2, Vue.js 3
 - **构建工具**: Vite
 - **主要依赖**:
   - `axios`: 用于网络请求和游戏下载。
-  - `node-7z` / `adm-zip`: 用于处理 `.7z` 和 `.zip` 压缩文件。
-  - `electron-store`: 用于持久化存储用户设置和游戏库数据。
-  - `fs-extra`: 提供增强的文件系统操作能力。
+  - `@tauri-apps/api`: 用于前端调用原生命令、路径与系统能力。
+  - `@tauri-apps/plugin-dialog` / `@tauri-apps/plugin-store`: 用于系统对话框与本地持久化配置。
+  - Rust 侧 (`reqwest`, `zip`, `sevenz-rust`): 用于下载、解压与导出流程。
+
+---
+
+## 最近清理
+
+- 移除了历史遗留调试日志与测试 IPC 监听。
+- 清理了 Rust 启动流程中的重复错误映射代码。
+- 保持行为不变，降低后续维护噪音。
