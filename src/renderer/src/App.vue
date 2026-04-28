@@ -4,6 +4,7 @@ import soulIcon from './assets/spr_soul.png'
 import defaultCover from './assets/default_cover.webp'
 import path from 'path-browserify';
 import { convertFileSrc } from '@tauri-apps/api/core'
+import api from './tauri-api'
 import confirmWav from './assets/sfx/confirm.wav'
 import cancelWav from './assets/sfx/cancel.wav'
 import switchWav from './assets/sfx/switch.wav'
@@ -328,6 +329,7 @@ const showErrorModal = ref(false);
 const downloadProgress = reactive<{ [key: string]: number }>({});
 const remoteConfigSha = ref('');
 const remoteConfigSnapshot = ref<any>(null);
+const remoteCoverDataMap = ref<Record<string, string>>({});
 const isSubmitting = ref(false); // 正在发送中的状态
 const COOLDOWN_MS = 60000;       // 冷却时间：30秒
 const selectedGroup = ref<'all' | 'hot' | 'new'>('all');
@@ -345,13 +347,26 @@ const appBackgroundStyle = computed(() => {
 });
 
 function getRemoteCoverCandidates(gameId: string): string[] {
-    const gitcodeUrl = `https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/${gameId}.webp`;
+    const gitcodeApiUrl = remoteCoverDataMap.value[gameId] || '';
     const jsdelivrUrl = `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${gameId}.webp`;
     const githubRawUrl = `https://raw.githubusercontent.com/znm2500/AU-Launcher-Repo/data/${gameId}.webp`;
 
-    return isChinaIP.value
-        ? [gitcodeUrl, jsdelivrUrl, githubRawUrl]
-        : [jsdelivrUrl, githubRawUrl, gitcodeUrl];
+    return gitcodeApiUrl
+        ? [gitcodeApiUrl, jsdelivrUrl, githubRawUrl]
+        : [jsdelivrUrl, githubRawUrl];
+}
+
+function base64ToUtf8String(b64: string): string {
+    if (!b64) return '';
+    const cleaned = String(b64).replace(/\n/g, '');
+    // atob -> binary string where each char code is a byte
+    const binary = atob(cleaned);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder('utf-8').decode(bytes);
 }
 
 function handleCoverLoadError(game: any) {
@@ -440,6 +455,47 @@ async function fetchConfigWithFallback(urls: string[]): Promise<any> {
     throw lastError || new Error('All config sources failed');
 }
 
+async function fetchConfigFromGitcodeApi(): Promise<any> {
+    const githubCfg = await api.getGithubConfigPublic();
+    const remoteFile = await api.getGitcodeFileContent(githubCfg.configPath);
+    const content = base64ToUtf8String(String(remoteFile.content || ''));
+    const data = JSON.parse(content);
+
+    if (!Array.isArray(data?.games)) {
+        throw new Error('Invalid config format from GitCode API');
+    }
+
+    remoteConfigSnapshot.value = data;
+    remoteConfigSha.value = String(remoteFile.sha || '');
+
+    return data;
+}
+
+function buildDownloadUrls(version: string, gameId: string): string[] {
+    const gitcodeUrl = `https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v${version}/${gameId}.7z`;
+    const githubUrl = `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v${version}/${gameId}.7z`;
+
+    return isChinaIP.value ? [gitcodeUrl, githubUrl] : [githubUrl, gitcodeUrl];
+}
+
+async function downloadGameWithFallback(urls: string[], destDir: string, filename: string, gameId: string): Promise<void> {
+    let lastError: any = null;
+
+    for (const url of urls) {
+        try {
+            console.log(`Download completed from ${url}`);
+            await api.downloadGame(url, destDir, filename, gameId);
+
+            return;
+        } catch (err) {
+            lastError = err;
+            console.warn(`Download failed from ${url}:`, err);
+        }
+    }
+
+    throw lastError || new Error('All download sources failed');
+}
+
 // 优化：fullList 计算属性
 // 这里本身逻辑不复杂，但为了避免频繁重建 Set，逻辑保持清晰即可
 const fullList = computed(() => {
@@ -463,7 +519,10 @@ const fullList = computed(() => {
                 const currentTryIndex = Number(g._imgTryIndex ?? 0);
                 const isCurrentUrlInCandidates = hasCurrentUrl && candidates.includes(g.img);
 
-                if (isCurrentUrlInCandidates) {
+                if (remoteCoverDataMap.value[g.id] && g.img !== remoteCoverDataMap.value[g.id]) {
+                    g._imgTryIndex = 0;
+                    g.img = remoteCoverDataMap.value[g.id];
+                } else if (isCurrentUrlInCandidates) {
                     g._imgTryIndex = Math.max(currentTryIndex, candidates.indexOf(g.img));
                 } else if (!hasCurrentUrl || g.img === defaultCover) {
                     g._imgTryIndex = 0;
@@ -486,27 +545,36 @@ function getHeatScore(game: any): number {
 
 async function refreshGithubSnapshot() {
     try {
-        const githubCfg = await window.api.getGithubConfigPublic();
-        const encodedPath = githubCfg.configPath.split('/').map(encodeURIComponent).join('/');
-        const apiUrl = `https://api.gitcode.com/api/v5/repos/${githubCfg.owner}/${githubCfg.repo}/contents/${encodedPath}?ref=${encodeURIComponent(githubCfg.branch)}`;
-        const res = await fetch(apiUrl, {
-            cache: 'no-store',
-            headers: {
-                Accept: 'application/json'
-            }
-        });
-
-        if (!res.ok) {
-            console.warn('Failed to fetch GitCode snapshot:', res.status);
-            return;
-        }
-
-        const data = await res.json();
-        const content = atob(String(data.content || '').replace(/\n/g, ''));
+        const githubCfg = await api.getGithubConfigPublic();
+        const data = await api.getGitcodeFileContent(githubCfg.configPath);
+        const content = base64ToUtf8String(String(data.content || ''));
         remoteConfigSnapshot.value = JSON.parse(content);
         remoteConfigSha.value = String(data.sha || '');
     } catch (err) {
-        console.warn('Failed to parse GitCode snapshot:', err);
+        console.warn('Failed to fetch GitCode snapshot:', err);
+    }
+}
+
+async function hydrateRemoteCoverCache(games: any[]) {
+    try {
+        const results = await Promise.all(games.map(async (game) => {
+            try {
+                const data = await api.getGitcodeFileContent(`data/${game.id}.webp`);
+                return [game.id, `data:image/webp;base64,${String(data.content || '').replace(/\n/g, '')}`] as const;
+            } catch {
+                return [game.id, ''] as const;
+            }
+        }));
+
+        const nextMap: Record<string, string> = { ...remoteCoverDataMap.value };
+        for (const [gameId, coverUrl] of results) {
+            if (coverUrl) {
+                nextMap[gameId] = coverUrl;
+            }
+        }
+        remoteCoverDataMap.value = nextMap;
+    } catch (err) {
+        console.warn('Failed to hydrate GitCode cover cache:', err);
     }
 }
 
@@ -642,7 +710,7 @@ async function loadBgmList() {
         const targetPath = settings.value.musicDirectory;
         if (!targetPath) return;
 
-        const files = await window.api.getBgmFiles(targetPath);
+        const files = await api.getBgmFiles(targetPath);
         bgmList.value = files;
     } catch (e) {
         console.error("Failed to load BGM list", e);
@@ -718,7 +786,7 @@ function selectGame(index: number) {
 
 function goToDownload() {
     playSfx('confirm');
-    window.api.openExternal(isChinaIP.value ? 'https://gitcode.com/znm1145/UT-DR-AU-Launcher/releases' : 'https://github.com/znm2500/UT-DR-AU-Launcher/releases');
+    api.openExternal(isChinaIP.value ? 'https://gitcode.com/znm1145/UT-DR-AU-Launcher/releases' : 'https://github.com/znm2500/UT-DR-AU-Launcher/releases');
     showUpdateModal.value = false;
 }
 
@@ -728,21 +796,21 @@ async function ignoreVersion() {
     ignoredVersion = latestVersion.value;
 
     // 修改处：保存到独立的 store key
-    await window.api.setStoreValue('ignoredVersion', ignoredVersion);
+    await api.setStoreValue('ignoredVersion', ignoredVersion);
 
     showUpdateModal.value = false;
 }
 const closeAnnouncement = async () => {
     playSfx('confirm');
     // 保存当前的索引到本地存储，下次除非 index 改变否则不再显示
-    await window.api.setStoreValue('last_announcement_index', announcementIndex);
+    await api.setStoreValue('last_announcement_index', announcementIndex);
     showAnnouncement.value = false;
 };
 
 function browseDownloadPath() {
     playSfx('confirm');
     (async () => {
-        const result = await window.api.openFolder();
+        const result = await api.openFolder();
         if (result) {
             settingsForm.downloadPath = result;
         }
@@ -751,7 +819,7 @@ function browseDownloadPath() {
 function browseMusicDirectory() {
     playSfx('confirm');
     (async () => {
-        const result = await window.api.openFolder();
+        const result = await api.openFolder();
         if (result) {
             settingsForm.musicDirectory = result;
         }
@@ -796,21 +864,22 @@ async function handleAction() {
             const game = activeGame.value;
             const originalType = game.type;
             if (indexInUserGames !== -1) {
-                const [movedGame] = userGames.value.splice(indexInUserGames, 1);
-                userGames.value.unshift(movedGame);
-                window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"'))).catch(console.error);
-                selectedIndex.value = 0;
+                // 不修改列表顺序以保持当前选中索引不变
+                // 如果你想把启动的游戏移到最前面，同时保持选中同一游戏，请用下面注释的代码并计算新的 selectedIndex
+                // const [movedGame] = userGames.value.splice(indexInUserGames, 1);
+                // userGames.value.unshift(movedGame);
+                // api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"'))).catch(console.error);
             }
 
-            if (game.version === "0.0.2" && !await window.api.isFolderExisted(path.join(CYF_PATH.value, 'Mods', game.name.en.replace(/[\/\?<>\\:\*\|":\x00-\x1f]/g, " ")))) {
+            if (game.version === "0.0.2" && !await api.isFolderExisted(path.join(CYF_PATH.value, 'Mods', game.name.en.replace(/[\/\?<>\\:\*\|":\x00-\x1f]/g, " ")))) {
                 triggerDialog(lang.value.no_cyf_mod_found, lang.value.error);
                 game.playable = 0;
-                window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
+                api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
                 return;
             }
             game.type = 'playing';
             forceRender();
-            await window.api.launchGame(game.execution_path);
+            await api.launchGame(game.execution_path);
             game.type = originalType;
             forceRender();
 
@@ -822,8 +891,8 @@ async function handleAction() {
                 activeGame.value.playable = false;
             }
             activeGame.value.type = 'local';
-            if (activeGame.value.version === '0.0.2') await window.api.setStoreValue('cyfpath', '');
-            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
+            if (activeGame.value.version === '0.0.2') await api.setStoreValue('cyfpath', '');
+            api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
         }
     } else if (activeGame.value.type === 'remote') {
         if (!navigator.onLine) {
@@ -836,14 +905,14 @@ async function handleAction() {
             showDownloadModal.value = true;
             if (downloadProgress.hasOwnProperty("cyf")) return;
             downloadProgress["cyf"] = 0;
-            await window.api.downloadGame(
-                isChinaIP ? "https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z" : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z`,
+            await downloadGameWithFallback(
+                buildDownloadUrls("0.0.2", "createyourfrisk"),
                 path.join(settings.value.downloadPath, "createyourfrisk"),
                 `${crypto.randomUUID()}.7z`,
                 "cyf"
             );
             CYF_PATH.value = path.join(settings.value.downloadPath, "createyourfrisk");
-            await window.api.setStoreValue("cyfpath", CYF_PATH.value);
+            await api.setStoreValue("cyfpath", CYF_PATH.value);
             showDownloadModal.value = false;
             triggerDialog(lang.value.cyf_download_success, lang.value.success, 'save');
         }
@@ -852,12 +921,8 @@ async function handleAction() {
         downloadProgress[game_temp.id] = 0;
         forceRender();
         try {
-            const url = isChinaIP.value
-                ? `https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`
-                : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v${game_temp.version}/${game_temp.id}.7z`;
-
-            await window.api.downloadGame(
-                url,
+            await downloadGameWithFallback(
+                buildDownloadUrls(game_temp.version, game_temp.id),
                 game_temp.version !== "0.0.2" ? path.join(settings.value.downloadPath, game_temp.id) : path.join(CYF_PATH.value, "Mods", game_temp.name.en.replace(/[\/\?<>\\:\*\|":\x00-\x1f]/g, " ")),
                 `${crypto.randomUUID()}.7z`,
                 game_temp.id
@@ -877,9 +942,9 @@ async function handleAction() {
             delete downloadProgress[game_temp.id];
 
             // 优化保存
-            await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
+            await api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
             if (isChinaIP.value) {
-                const bumpResult = await window.api.incrementRemoteHighscore(game_temp.id, {
+                const bumpResult = await api.incrementRemoteHighscore(game_temp.id, {
                     baseSha: remoteConfigSha.value,
                     baseConfig: remoteConfigSnapshot.value
                 });
@@ -902,8 +967,6 @@ async function handleAction() {
                     }
                 }
             }
-
-            selectedIndex.value = 0;
             forceRender();
 
         } catch (err: any) {
@@ -939,14 +1002,14 @@ async function importCyfMod() {
         showDownloadModal.value = true;
         if (downloadProgress.hasOwnProperty("cyf")) return;
         downloadProgress["cyf"] = 0;
-        await window.api.downloadGame(
-            isChinaIP ? "https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z" : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z`,
+        await downloadGameWithFallback(
+            buildDownloadUrls("0.0.2", "createyourfrisk"),
             path.join(settings.value.downloadPath, "createyourfrisk"),
             `${crypto.randomUUID()}.7z`,
             "cyf"
         );
         CYF_PATH.value = path.join(settings.value.downloadPath, "createyourfrisk");
-        await window.api.setStoreValue("cyfpath", CYF_PATH.value);
+        await api.setStoreValue("cyfpath", CYF_PATH.value);
         showDownloadModal.value = false;
         triggerDialog(lang.value.cyf_download_success, lang.value.success, 'save');
     }
@@ -964,7 +1027,7 @@ async function importCyfMod() {
 function browseExeImportPath() {
     playSfx('confirm');
     (async () => {
-        const result = await window.api.openFile(lang.value.name_exe, ['exe']);
+        const result = await api.openFile(lang.value.name_exe, ['exe']);
         if (result) {
             exeImportForm.path = result;
         }
@@ -973,7 +1036,7 @@ function browseExeImportPath() {
 function browseCyfImportPath() {
     playSfx('confirm');
     (async () => {
-        const result = await window.api.openFolder();
+        const result = await api.openFolder();
         if (result) {
             exeImportForm.path = result;
         }
@@ -1011,7 +1074,7 @@ async function confirmExeImport() {
         }
 
         userGames.value.unshift(newGame);
-        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
+        await api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
         showExeImportModal.value = false;
         selectedIndex.value = filteredList.value.findIndex(g => g.id === newGame.id);
         triggerDialog(lang.value.success, lang.value.success, 'save');
@@ -1048,13 +1111,13 @@ async function confirmCyfImport() {
         if (exeImportForm.image) {
             newGame.img = await readFileAsDataURL(exeImportForm.image);
         }
-        if (await window.api.isParentFolder(exeImportForm.path, path.join(CYF_PATH.value, 'Mods'))) {
-            await window.api.renameFolder(exeImportForm.path, exeImportForm.name);
+        if (await api.isParentFolder(exeImportForm.path, path.join(CYF_PATH.value, 'Mods'))) {
+            await api.renameFolder(exeImportForm.path, exeImportForm.name);
         }
         else
-            await window.api.moveFolder(exeImportForm.path, path.join(CYF_PATH.value, 'Mods', newGame.name.en.replace(/[\/\?<>\\:\*\|":\x00-\x1f]/g, " ")));
+            await api.moveFolder(exeImportForm.path, path.join(CYF_PATH.value, 'Mods', newGame.name.en.replace(/[\/\?<>\\:\*\|":\x00-\x1f]/g, " ")));
         userGames.value.unshift(newGame);
-        await window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
+        await api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')));
         showCyfImportModal.value = false;
         selectedIndex.value = filteredList.value.findIndex(g => g.id === newGame.id);
         triggerDialog(lang.value.success, lang.value.success, 'save');
@@ -1076,7 +1139,7 @@ async function importFromAup() {
     playSfx('confirm');
     showImportTypeModal.value = false;
     try {
-        const filePath = await window.api.openFile(lang.value.name_aup, ['aup']);
+        const filePath = await api.openFile(lang.value.name_aup, ['aup']);
         if (!filePath) return;
 
         playSfx('confirm');
@@ -1087,7 +1150,7 @@ async function importFromAup() {
 
         // 2. 调用后端解析 (这是一个耗时操作)
         // 注意：确保你的主进程 parseAup 函数在解压时会发送 'export-progress' 事件
-        const aupdata = await window.api.parseAup(filePath);
+        const aupdata = await api.parseAup(filePath);
 
         // 3. 解析完成：关闭解析弹窗
         isParsingAup.value = false;
@@ -1102,7 +1165,7 @@ async function importFromAup() {
         } else {
             // 如果包里没有游戏，给个提示
             triggerDialog("No games found in this package.", lang.value.error);
-            window.api.deleteFolder(tmpAupDir.value); // 清理临时目录
+            api.deleteFolder(tmpAupDir.value); // 清理临时目录
         }
     } catch (err: any) {
         isParsingAup.value = false; // 出错也要确保关掉弹窗
@@ -1132,14 +1195,14 @@ async function performAupImport() {
                 showDownloadModal.value = true;
                 if (downloadProgress.hasOwnProperty("cyf")) return;
                 downloadProgress["cyf"] = 0;
-                await window.api.downloadGame(
-                    isChinaIP ? "https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z" : `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v0.0.2/createyourfrisk.7z`,
+                await downloadGameWithFallback(
+                    buildDownloadUrls("0.0.2", "createyourfrisk"),
                     path.join(settings.value.downloadPath, "createyourfrisk"),
                     `${crypto.randomUUID()}.7z`,
                     "cyf"
                 );
                 CYF_PATH.value = path.join(settings.value.downloadPath, "createyourfrisk");
-                await window.api.setStoreValue("cyfpath", CYF_PATH.value);
+                await api.setStoreValue("cyfpath", CYF_PATH.value);
                 showDownloadModal.value = false;
                 triggerDialog(lang.value.cyf_download_success, lang.value.success, 'save');
             }
@@ -1153,7 +1216,7 @@ async function performAupImport() {
             const destDir = g.version === "0.0.2" ? path.join(CYF_PATH.value, "Mods", g.name.en) : path.join(settings.value.downloadPath, g.id);
             const newExecPath = path.normalize(g.version === "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : path.join(destDir, path.basename(g.execution_path.replace(/\\/g, '/'))));
 
-            await window.api.moveFolder(path.join(tmpAupDir.value, g.id), destDir);
+            await api.moveFolder(path.join(tmpAupDir.value, g.id), destDir);
 
             const newG = { ...g, execution_path: newExecPath };
             if (userGamesMap.has(g.id)) {
@@ -1167,14 +1230,14 @@ async function performAupImport() {
         await Promise.all(moveTasks);
         const delayDelete = (path) => new Promise((resolve) => {
             setTimeout(async () => {
-                await window.api.deleteFolder(path);
+                await api.deleteFolder(path);
                 resolve(true);
             }, 1000);
         });
 
         // 并行执行存储和清理
         await Promise.all([
-            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"'))),
+            api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"'))),
             delayDelete(tmpAupDir.value)
         ]);
         zipProgress.value = 0;
@@ -1228,13 +1291,13 @@ function performExport() {
 
     (async () => {
         try {
-            const saveDir = await window.api.saveFile(lang.value.name_aup, ['aup']);
+            const saveDir = await api.saveFile(lang.value.name_aup, ['aup']);
             if (!saveDir) return;
             isExporting.value = true;
             // 优化：仅深拷贝需要导出的部分
             const gamesToExport = localUserGames.value.filter(g => selectedExportIds.value.has(g.id));
 
-            await window.api.exportGame(JSON.parse(JSON.stringify(gamesToExport)), saveDir);
+            await api.exportGame(JSON.parse(JSON.stringify(gamesToExport)), saveDir);
             triggerDialog(lang.value.export_success, lang.value.success, 'save');
         } catch (err: any) {
             triggerDialog(`${err}`, lang.value.error);
@@ -1267,8 +1330,8 @@ function performDelete() {
     (async () => {
         // 优化：删除文件和保存配置可以并行，因为内存状态已经更新了
         await Promise.all([
-            execution_path ? window.api.deleteFolder(execution_path) : Promise.resolve(),
-            window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')))
+            execution_path ? api.deleteFolder(execution_path) : Promise.resolve(),
+            api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"')))
         ]);
     })();
 }
@@ -1281,7 +1344,7 @@ function cancelDelete() {
 function browseGamePath() {
     playSfx('confirm');
     (async () => {
-        const result = await window.api.openFile(lang.value.name_exe, ['exe']);
+        const result = await api.openFile(lang.value.name_exe, ['exe']);
         if (result) {
             settingsForm.gamePath = result;
         }
@@ -1385,11 +1448,11 @@ async function saveSettings() {
         // 并行保存 Settings 和 UserGames
         const saveTasks: Promise<any>[] = [];
         if (settingsUpdated) {
-            saveTasks.push(window.api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value))));
+            saveTasks.push(api.setStoreValue('settings', JSON.parse(JSON.stringify(settings.value))));
         }
 
         if (gameUpdated || tasks.length > 0) { // 如果有图片更新或游戏信息变更
-            saveTasks.push(window.api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"'))));
+            saveTasks.push(api.setStoreValue('userGames', JSON.parse(JSON.stringify(userGames.value).replace(/"playing"/g, '"local"'))));
         }
 
         await Promise.all(saveTasks);
@@ -1416,7 +1479,7 @@ function handleFileSelect(e: Event) {
 async function cancelAupImport() {
     showAupImportModal.value = false;
     playSfx('cancel');
-    window.api.deleteFolder(tmpAupDir.value);
+    api.deleteFolder(tmpAupDir.value);
 }
 function handleBgFileSelect(e: Event) {
     const input = e.target as HTMLInputElement;
@@ -1505,7 +1568,7 @@ const performSubmit = async () => {
             imageBase64 = arrayBufferToBase64(arrayBuffer);
         }
 
-        await window.api.submitGameApplication({
+        await api.submitGameApplication({
             name: submitForm.name,
             link: submitForm.link,
             desc: submitForm.desc,
@@ -1545,24 +1608,24 @@ onMounted(async () => {
     try {
         // 0. 初始化基础功能
         initSfx();
-        window.api.onDownloadProgress((data: { id: string, percent: number }) => {
+        api.onDownloadProgress((data: { id: string, percent: number }) => {
             downloadProgress[data.id] = data.percent;
         });
-        window.api.onZipProgress((percent: number) => {
+        api.onZipProgress((percent: number) => {
             zipProgress.value = percent;
 
         })
         // 1. 发起所有本地读取请求 (并行)
-        const pGames = window.api.getStoreValue('userGames', []);
-        const pSettings = window.api.getStoreValue('settings', {
+        const pGames = api.getStoreValue('userGames', []);
+        const pSettings = api.getStoreValue('settings', {
             'lang': 'en',
-            'downloadPath': await window.api.getlocalpath('downloads'),
+            'downloadPath': await api.getlocalpath('downloads'),
             'backgroundImage': '',
-            'musicDirectory': await window.api.getlocalpath('music')
+            'musicDirectory': await api.getlocalpath('music')
         }).catch((err) => { console.error(err) });
-        const pCyfpath = window.api.getStoreValue('cyfpath', '');
+        const pCyfpath = api.getStoreValue('cyfpath', '');
         // 2. 等待所有本地数据返回 (这是最快的 IO 方式)
-        const pIgnoredVersion = window.api.getStoreValue('ignoredVersion', '1.3.0');
+        const pIgnoredVersion = api.getStoreValue('ignoredVersion', '1.3.0');
 
         const [games, savedSettings, savedIgnoredVersion, savedCyfPath] = await Promise.all([
             pGames, pSettings, pIgnoredVersion, pCyfpath
@@ -1570,12 +1633,12 @@ onMounted(async () => {
         userGames.value = games;
         settings.value = savedSettings;
         CYF_PATH.value = savedCyfPath;
-        if (!await window.api.isFolderExisted(CYF_PATH.value)) {
+        if (!await api.isFolderExisted(CYF_PATH.value)) {
             CYF_PATH.value = '';
-            window.api.setStoreValue('cyfpath', '');
+            api.setStoreValue('cyfpath', '');
         }
         if (!settings.value.musicDirectory) {
-            settings.value.musicDirectory = await window.api.getlocalpath('music');
+            settings.value.musicDirectory = await api.getlocalpath('music');
         }
         loadBgmList();
         bgmAudio.addEventListener('timeupdate', () => {
@@ -1615,32 +1678,38 @@ onMounted(async () => {
         try {
             // 1. 检测 IP (后端已做防崩溃处理)
             // 即使这里慢，用户也能操作本地游戏
-            const ipCheckResult = await window.api.checkIsChinaIP();
+            const ipCheckResult = await api.checkIsChinaIP();
             isChinaIP.value = ipCheckResult;
+            console.log('IP check result:', ipCheckResult);
+            let data: any | null = null;
+            try {
+                data = await fetchConfigFromGitcodeApi();
+            } catch (err) {
+                console.warn('Failed to load GitCode config via API:', err);
+            }
 
-            const configCandidates = isChinaIP.value
-                ? [
-                    'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/config.json',
+            if (!data) {
+                const configCandidates = [
                     'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json',
                     'https://raw.githubusercontent.com/znm2500/AU-Launcher-Repo/data/config.json'
-                ]
-                : [
-                    'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json',
-                    'https://raw.githubusercontent.com/znm2500/AU-Launcher-Repo/data/config.json',
-                    'https://raw.gitcode.com/znm1145/AU-Launcher-Repo/raw/data/config.json'
                 ];
 
-            const data = await fetchConfigWithFallback(configCandidates);
+                data = await fetchConfigWithFallback(configCandidates);
+            }
+
             GITHUB_GAMES.value = data.games;
             saveRemoteConfigCache(data);
 
             await refreshGithubSnapshot();
+            if (isChinaIP.value) {
+                await hydrateRemoteCoverCache(data.games || []);
+            }
             if (data.newest_version !== currentVersion && data.newest_version !== ignoredVersion) {
                 latestVersion.value = data.newest_version;
                 updateLog.value = data.update_log || {};
                 showUpdateModal.value = true;
             }
-            const lastReadIndex = await window.api.getStoreValue('last_announcement_index', '');
+            const lastReadIndex = await api.getStoreValue('last_announcement_index', '');
 
             // 如果服务器公告索引不为 0 且 与本地保存的不一致，则显示弹窗
             if (data.announcement?.en !== lastReadIndex && data.announcement?.en) {
@@ -1851,7 +1920,7 @@ onUnmounted(() => {
             <div v-if="showImportTypeModal" id="import-type-overlay">
                 <div class="confirm-card" style="width: 480px;">
                     <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title
-                    }} ]
+                        }} ]
                     </div>
                     <div class="confirm-actions"
                         style="flex-direction: column; align-items: flex-start; gap: 20px; padding: 0 20px;">
@@ -1859,10 +1928,10 @@ onUnmounted(() => {
                             lang.import_method_exe }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{
                             lang.import_method_aup
-                        }}</div>
+                            }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importCyfMod">{{
                             lang.import_method_cyf
-                        }}</div>
+                            }}</div>
                         <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
                         <div class="btn" style="align-self: center;"
                             @click="showImportTypeModal = false; playSfx('cancel');">{{
@@ -2098,7 +2167,7 @@ onUnmounted(() => {
                                 :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
                                 @click="toggleExportSelection(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
-                                }}</span>
+                                    }}</span>
                                 {{ g.name[currentLang] || g.name['en'] }}
                             </div>
                         </div>
@@ -2132,10 +2201,10 @@ onUnmounted(() => {
                         <div style="display:flex;gap:8px;align-items:center;">
                             <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
                                 lang.settings_choose_image
-                            }}</label>
+                                }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                                 settingsForm.bgImageName
-                            }}</div>
+                                }}</div>
                         </div>
                         <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />

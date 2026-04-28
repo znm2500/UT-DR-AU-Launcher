@@ -24,7 +24,8 @@ urlencoding = "2"
 walkdir = "2"
 webbrowser = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-
+public-ip = "0.2"
+maxminddb = "0.24"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

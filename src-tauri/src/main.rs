@@ -3,6 +3,8 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use futures_util::StreamExt;
+use maxminddb::geoip2;
+use public_ip;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -16,7 +18,6 @@ use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
-
 const HALF_GB_BYTES: u64 = 720 * 1024 * 1024;
 const TWO_GB_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 static RUNNING_GAMES: LazyLock<Mutex<HashSet<String>>> =
@@ -60,6 +61,12 @@ struct PublicGithubConfig {
     config_path: String,
 }
 
+#[derive(Debug, Serialize)]
+struct GitcodeFileContent {
+    content: String,
+    sha: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct SubmitGameApplicationPayload {
     name: String,
@@ -71,13 +78,6 @@ struct SubmitGameApplicationPayload {
     image_base64: Option<String>,
     #[serde(rename = "imageMd5")]
     image_md5: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct IpApiResult {
-    country_code: Option<String>,
-    region: Option<String>,
-    country_name: Option<String>,
 }
 
 fn now_millis() -> u128 {
@@ -271,6 +271,56 @@ fn get_gitcode_config() -> (String, String, String, String, String) {
         "config.json".to_string(),
         "ZNzRgfc8kf3PAxezKQ77dkyb".to_string(),
     )
+}
+
+#[tauri::command]
+async fn get_gitcode_file_content(path_in_repo: String) -> Result<GitcodeFileContent, String> {
+    let (owner, repo, branch, _, token) = get_gitcode_config();
+    if token.is_empty() {
+        return Err("Missing GitCode token".to_string());
+    }
+
+    let encoded_path = path_in_repo
+        .split('/')
+        .map(urlencoding::encode)
+        .collect::<Vec<_>>()
+        .join("/");
+    let api_url = format!(
+        "https://api.gitcode.com/api/v5/repos/{}/{}/contents/{}",
+        owner, repo, encoded_path
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&api_url)
+        .query(&[("ref", branch.as_str()), ("access_token", token.as_str())])
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|err| err.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitCode API request failed with status: {}",
+            response.status()
+        ));
+    }
+
+    let remote: Value = response.json().await.map_err(|err| err.to_string())?;
+    let content = remote
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing content in gitcode response".to_string())?;
+    let sha = remote
+        .get("sha")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    Ok(GitcodeFileContent {
+        content: content.replace('\n', ""),
+        sha,
+    })
 }
 
 fn ensure_parent_exists(path: &Path) -> Result<(), String> {
@@ -483,7 +533,7 @@ async fn download_and_extract(
     ensure_parent_exists(&save_path)?;
 
     let response = reqwest::Client::new()
-        .get(download_url)
+        .get(&download_url)
         .send()
         .await
         .map_err(|err| err.to_string())?;
@@ -780,41 +830,48 @@ async fn increment_remote_highscore(
 
 #[tauri::command]
 async fn check_local_ip_region() -> bool {
-    let req = reqwest::Client::new()
-        .get("https://ipapi.co/json/")
-        .timeout(std::time::Duration::from_secs(8))
-        .send()
-        .await;
-
-    let Ok(resp) = req else {
-        return false;
+    // --- 第一步：使用 public-ip 库获取公网 IP ---
+    // addr() 会从可用的外部服务解析当前公网 IP
+    let ip = match public_ip::addr().await {
+        Some(ip) => ip,
+        None => return false, // 如果没联网或解析失败
     };
 
-    let parsed = resp.json::<IpApiResult>().await;
-    let Ok(ip_info) = parsed else {
-        return false;
+    // --- 第二步：本地判断逻辑 (GeoLite2) ---
+    // 提示：你需要下载 GeoLite2-Country.mmdb 并放在项目目录下
+    let reader = match maxminddb::Reader::open_readfile("resources/GeoLite2-Country.mmdb") {
+        Ok(r) => r,
+        Err(_) => return false,
     };
 
-    let is_cn = ip_info
-        .country_code
-        .as_deref()
-        .map(|v| v.eq_ignore_ascii_case("CN"))
-        .unwrap_or(false)
-        || ip_info
-            .country_name
-            .as_deref()
-            .map(|v| v.contains("China") || v.contains("中国"))
-            .unwrap_or(false);
+    let lookup: Result<geoip2::City, _> = reader.lookup(ip);
+    let city = match lookup {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
 
-    if !is_cn {
+    // --- 第三步：精细化地区过滤 ---
+    // 1. 验证国家码
+    let country_code = city.country.as_ref().and_then(|c| c.iso_code);
+    if country_code != Some("CN") {
         return false;
     }
 
-    let special_regions = ["香港", "澳门", "台湾", "Hong Kong", "Macau", "Taiwan"];
-    let region = ip_info.region.unwrap_or_default();
-    !special_regions.iter().any(|item| region.contains(item))
-}
+    // 2. 排除港澳台 (ISO-3166-2 标准)
+    // 在 MaxMind 数据库中，这些通常记录在 subdivisions 中
+    if let Some(subdivisions) = city.subdivisions {
+        if let Some(first_sub) = subdivisions.first() {
+            if let Some(iso) = first_sub.iso_code {
+                match iso {
+                    "HK" | "MO" | "TW" => return false,
+                    _ => {}
+                }
+            }
+        }
+    }
 
+    true
+}
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -915,6 +972,7 @@ fn main() {
             parse_aup,
             export_game,
             get_github_config_public,
+            get_gitcode_file_content,
             increment_remote_highscore,
             check_local_ip_region,
             open_external_url,

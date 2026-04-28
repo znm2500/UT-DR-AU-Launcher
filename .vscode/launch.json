@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Electron: Main (dev)",
+      "name": "Tauri: Main (dev)",
       "type": "node-terminal",
       "request": "launch",
       "command": "npm run dev",

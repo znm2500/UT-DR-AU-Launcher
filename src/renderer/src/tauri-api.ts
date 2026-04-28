@@ -1,10 +1,15 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { audioDir, downloadDir, tempDir } from '@tauri-apps/api/path'
+import { audioDir, downloadDir, tempDir, appDataDir, join } from '@tauri-apps/api/path'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { Store } from '@tauri-apps/plugin-store'
 
 const storePromise = Store.load('settings.kola')
+const legacyStorePromise = (async () => {
+    const appDataPath = await appDataDir()
+    const legacyConfigPath = await join(appDataPath, '..', 'au-launcher', 'config.json')
+    return Store.load(legacyConfigPath)
+})()
 let unlistenDownload: UnlistenFn | null = null
 let unlistenZip: UnlistenFn | null = null
 
@@ -55,7 +60,20 @@ const api = {
     async getStoreValue(key: string, value?: any): Promise<any> {
         const store = await storePromise
         const found = await store.get(key)
-        return found === undefined ? value : found
+        if (found !== undefined) {
+            return found
+        }
+
+        // 兼容 Electron 旧版配置，避免迁移后丢失历史数据。
+        const legacyStore = await legacyStorePromise
+        const legacyFound = await legacyStore.get(key)
+        if (legacyFound !== undefined) {
+            await store.set(key, legacyFound)
+            await store.save()
+            return legacyFound
+        }
+
+        return value
     },
 
     async setStoreValue(key: string, value: any): Promise<void> {
@@ -148,6 +166,10 @@ const api = {
         return invoke<{ owner: string; repo: string; branch: string; configPath: string }>('get_github_config_public')
     },
 
+    async getGitcodeFileContent(pathInRepo: string): Promise<{ content: string; sha: string }> {
+        return invoke<{ content: string; sha: string }>('get_gitcode_file_content', { pathInRepo })
+    },
+
     async incrementRemoteHighscore(
         gameId: string,
         snapshot?: { baseSha?: string; baseConfig?: any }
@@ -159,5 +181,4 @@ const api = {
     }
 }
 
-    ; (window as any).api = api
-    ; (window as any).electron = {}
+export default api

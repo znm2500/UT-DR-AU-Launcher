@@ -8,10 +8,5 @@
     "types": ["node"]
   },
   "include": ["vite.config.ts"],
-  "exclude": ["src/main/**/*", "src/preload/**/*"],
-  "references": [
-    {
-      "path": "./tsconfig.web.json"
-    }
-  ]
+  "exclude": ["src/main/**/*", "src/preload/**/*"]
 }
