@@ -72,7 +72,7 @@ function getGitcodeConfig() {
     repo: 'AU-Launcher-Repo',
     branch: 'data',
     configPath: 'config.json',
-    token: "ZNzRgfc8kf3PAxezKQ77dkyb"
+    token: ""
   };
 }
 
