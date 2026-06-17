@@ -269,7 +269,7 @@ fn get_gitcode_config() -> (String, String, String, String, String) {
         "AU-Launcher-Repo".to_string(),
         "data".to_string(),
         "config.json".to_string(),
-        "ZNzRgfc8kf3PAxezKQ77dkyb".to_string(),
+        "".to_string(),
     )
 }
 
@@ -891,7 +891,7 @@ async fn submit_game_application(payload: SubmitGameApplicationPayload) -> Resul
     }
 
     const WEBHOOK_URL: &str =
-        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9c34b350-f8e9-4508-b5f9-2364eb84166c";
+        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=";
 
     let desc = payload
         .desc
