@@ -17,8 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager};
 use walkdir::WalkDir;
-use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use zip::ZipArchive;
 const HALF_GB_BYTES: u64 = 720 * 1024 * 1024;
 const TWO_GB_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 static RUNNING_GAMES: LazyLock<Mutex<HashSet<String>>> =
@@ -517,7 +516,7 @@ fn extract_archive(
     }
 }
 
-fn zip_directory_with_progress(
+fn sevenz_directory_with_progress(
     source_dir: &Path,
     save_file: &Path,
     app: &AppHandle,
@@ -527,42 +526,39 @@ fn zip_directory_with_progress(
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
 
-    let zip_file = File::create(save_file).map_err(|err| err.to_string())?;
-    let mut zip = ZipWriter::new(zip_file);
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let seven_zip_path = bundled_7za_path(app)?;
+    let save_file_arg = save_file.to_string_lossy().to_string();
+    let source_arg = source_dir.join("*").to_string_lossy().to_string();
 
-    let files: Vec<PathBuf> = WalkDir::new(source_dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.path().to_path_buf())
-        .collect();
+    let output = Command::new(&seven_zip_path)
+        .current_dir(source_dir)
+        .arg("a")
+        .arg("-t7z")
+        .arg("-mx=5")
+        .arg("-y")
+        .arg(&save_file_arg)
+        .arg(&source_arg)
+        .output()
+        .map_err(|err| {
+            format!(
+                "failed to run bundled 7za at {}: {}",
+                seven_zip_path.to_string_lossy(),
+                err
+            )
+        })?;
 
-    let total = files.len().max(1) as u32;
-
-    for (idx, file_path) in files.iter().enumerate() {
-        let relative = file_path
-            .strip_prefix(source_dir)
-            .map_err(|err| err.to_string())?
-            .to_string_lossy()
-            .replace('\\', "/");
-
-        zip.start_file(relative, options)
-            .map_err(|err| err.to_string())?;
-
-        let mut input = File::open(file_path).map_err(|err| err.to_string())?;
-        let mut buffer = Vec::new();
-        input
-            .read_to_end(&mut buffer)
-            .map_err(|err| err.to_string())?;
-        zip.write_all(&buffer).map_err(|err| err.to_string())?;
-
-        let current = idx as u32 + 1;
-        let mapped = start_percent + (current * 70 / total);
-        let _ = app.emit("zip-progress", mapped.min(100));
+    if !output.status.success() {
+        let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if details.is_empty() {
+            return Err(format!("7za archive creation failed with status {}", output.status));
+        }
+        return Err(format!(
+            "7za archive creation failed with status {}: {}",
+            output.status, details
+        ));
     }
 
-    zip.finish().map_err(|err| err.to_string())?;
+    let _ = app.emit("zip-progress", 100_u32.max(start_percent));
     Ok(())
 }
 
@@ -1005,7 +1001,7 @@ async fn export_game(
             fs::remove_file(&out_file).map_err(|err| err.to_string())?;
         }
 
-        zip_directory_with_progress(&temp_dir, &out_file, &app, 30)?;
+        sevenz_directory_with_progress(&temp_dir, &out_file, &app, 30)?;
         Ok(true)
     })();
 
