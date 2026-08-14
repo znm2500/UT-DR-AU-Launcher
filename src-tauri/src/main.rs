@@ -474,16 +474,30 @@ fn bundled_7za_path(app: &AppHandle) -> Result<PathBuf, String> {
     ))
 }
 
+#[cfg(target_os = "windows")]
+fn hide_console_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    command.creation_flags(0x08000000);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_console_window(_command: &mut Command) {}
+
 fn extract_7z(app: &AppHandle, archive_path: &Path, output_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(output_dir).map_err(|err| err.to_string())?;
     let seven_zip_path = bundled_7za_path(app)?;
 
-    let output = Command::new(&seven_zip_path)
+    let mut command = Command::new(&seven_zip_path);
+    command
         .arg("x")
         .arg("-y")
         .arg("-aoa")
         .arg(format!("-o{}", output_dir.to_string_lossy()))
-        .arg(archive_path)
+        .arg(archive_path);
+    hide_console_window(&mut command);
+
+    let output = command
         .output()
         .map_err(|err| {
             format!(
@@ -541,14 +555,18 @@ fn sevenz_directory_with_progress(
     let save_file_arg = save_file.to_string_lossy().to_string();
     let source_arg = source_dir.join("*").to_string_lossy().to_string();
 
-    let output = Command::new(&seven_zip_path)
+    let mut command = Command::new(&seven_zip_path);
+    command
         .current_dir(source_dir)
         .arg("a")
         .arg("-t7z")
         .arg("-mx=5")
         .arg("-y")
         .arg(&save_file_arg)
-        .arg(&source_arg)
+        .arg(&source_arg);
+    hide_console_window(&mut command);
+
+    let output = command
         .output()
         .map_err(|err| {
             format!(
