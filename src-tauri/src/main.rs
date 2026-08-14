@@ -7,7 +7,9 @@ use maxminddb::geoip2;
 use public_ip;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -59,6 +61,12 @@ struct PublicGithubConfig {
     branch: String,
     #[serde(rename = "configPath")]
     config_path: String,
+    #[serde(rename = "githubDataOwner")]
+    github_data_owner: String,
+    #[serde(rename = "githubDataRepo")]
+    github_data_repo: String,
+    #[serde(rename = "githubDataBranch")]
+    github_data_branch: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,6 +74,27 @@ struct GitcodeFileContent {
     content: String,
     sha: String,
 }
+
+#[derive(Debug, Clone)]
+struct LocalConfig {
+    gitcode_owner: String,
+    gitcode_repo: String,
+    gitcode_branch: String,
+    gitcode_config_path: String,
+    gitcode_token: String,
+    wecom_webhook_url: String,
+}
+
+static LOCAL_CONFIG_CACHE: LazyLock<Mutex<Option<LocalConfig>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+const DEFAULT_GITCODE_OWNER: &str = "znm1145";
+const DEFAULT_GITCODE_REPO: &str = "AU-Launcher-Repo";
+const DEFAULT_GITCODE_BRANCH: &str = "data";
+const DEFAULT_GITCODE_CONFIG_PATH: &str = "config.json";
+const DEFAULT_GITHUB_DATA_OWNER: &str = "znm2500";
+const DEFAULT_GITHUB_DATA_REPO: &str = "AU-Launcher-Repo";
+const DEFAULT_GITHUB_DATA_BRANCH: &str = "data";
 
 #[derive(Debug, Deserialize)]
 struct SubmitGameApplicationPayload {
@@ -85,6 +114,205 @@ fn now_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|v| v.as_millis())
         .unwrap_or(0)
+}
+
+fn normalize_property_value(value: &str) -> String {
+    value.trim().trim_matches('"').to_string()
+}
+
+fn parse_local_properties(contents: &str) -> HashMap<String, String> {
+    let mut values = HashMap::new();
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+
+        if let Some((key, value)) = trimmed.split_once('=') {
+            values.insert(key.trim().to_string(), normalize_property_value(value));
+        }
+    }
+
+    values
+}
+
+fn local_properties_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+
+    let mut push_ancestors = |start: Option<PathBuf>| {
+        if let Some(path) = start {
+            let base = if path.is_file() {
+                path.parent().map(Path::to_path_buf).unwrap_or(path)
+            } else {
+                path
+            };
+
+            for ancestor in base.ancestors() {
+                let candidate = ancestor.join("local.properties");
+                if seen.insert(candidate.clone()) {
+                    candidates.push(candidate);
+                }
+            }
+        }
+    };
+
+    push_ancestors(std::env::current_dir().ok());
+    push_ancestors(std::env::current_exe().ok());
+
+    candidates
+}
+
+fn required_property(
+    values: &HashMap<String, String>,
+    keys: &[&str],
+    label: &str,
+) -> Result<String, String> {
+    for key in keys {
+        if let Some(value) = values.get(*key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
+            }
+        }
+    }
+
+    Err(format!("Missing required property: {}", label))
+}
+
+fn optional_property(values: &HashMap<String, String>, keys: &[&str], fallback: &str) -> String {
+    for key in keys {
+        if let Some(value) = values.get(*key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+
+    fallback.to_string()
+}
+
+fn load_public_github_config() -> PublicGithubConfig {
+    for candidate in local_properties_candidates() {
+        if let Ok(contents) = fs::read_to_string(&candidate) {
+            let values = parse_local_properties(&contents);
+            return PublicGithubConfig {
+                owner: optional_property(
+                    &values,
+                    &["gitcode.owner", "gitcode_owner"],
+                    DEFAULT_GITCODE_OWNER,
+                ),
+                repo: optional_property(
+                    &values,
+                    &["gitcode.repo", "gitcode_repo"],
+                    DEFAULT_GITCODE_REPO,
+                ),
+                branch: optional_property(
+                    &values,
+                    &["gitcode.branch", "gitcode_branch"],
+                    DEFAULT_GITCODE_BRANCH,
+                ),
+                config_path: optional_property(
+                    &values,
+                    &["gitcode.config_path", "gitcode_config_path"],
+                    DEFAULT_GITCODE_CONFIG_PATH,
+                ),
+                github_data_owner: optional_property(
+                    &values,
+                    &["github.data_owner", "github_data_owner"],
+                    DEFAULT_GITHUB_DATA_OWNER,
+                ),
+                github_data_repo: optional_property(
+                    &values,
+                    &["github.data_repo", "github_data_repo"],
+                    DEFAULT_GITHUB_DATA_REPO,
+                ),
+                github_data_branch: optional_property(
+                    &values,
+                    &["github.data_branch", "github_data_branch"],
+                    DEFAULT_GITHUB_DATA_BRANCH,
+                ),
+            };
+        }
+    }
+
+    PublicGithubConfig {
+        owner: DEFAULT_GITCODE_OWNER.to_string(),
+        repo: DEFAULT_GITCODE_REPO.to_string(),
+        branch: DEFAULT_GITCODE_BRANCH.to_string(),
+        config_path: DEFAULT_GITCODE_CONFIG_PATH.to_string(),
+        github_data_owner: DEFAULT_GITHUB_DATA_OWNER.to_string(),
+        github_data_repo: DEFAULT_GITHUB_DATA_REPO.to_string(),
+        github_data_branch: DEFAULT_GITHUB_DATA_BRANCH.to_string(),
+    }
+}
+
+fn load_local_config() -> Result<LocalConfig, String> {
+    if let Some(cached) = LOCAL_CONFIG_CACHE
+        .lock()
+        .map_err(|err| err.to_string())?
+        .clone()
+    {
+        return Ok(cached);
+    }
+
+    let mut last_error = None;
+    for candidate in local_properties_candidates() {
+        match fs::read_to_string(&candidate) {
+            Ok(contents) => {
+                let values = parse_local_properties(&contents);
+                let config = LocalConfig {
+                    gitcode_owner: required_property(
+                        &values,
+                        &["gitcode.owner", "gitcode_owner"],
+                        "gitcode.owner",
+                    )?,
+                    gitcode_repo: required_property(
+                        &values,
+                        &["gitcode.repo", "gitcode_repo"],
+                        "gitcode.repo",
+                    )?,
+                    gitcode_branch: required_property(
+                        &values,
+                        &["gitcode.branch", "gitcode_branch"],
+                        "gitcode.branch",
+                    )?,
+                    gitcode_config_path: required_property(
+                        &values,
+                        &["gitcode.config_path", "gitcode_config_path"],
+                        "gitcode.config_path",
+                    )?,
+                    gitcode_token: required_property(
+                        &values,
+                        &["gitcode.token", "gitcode_token"],
+                        "gitcode.token",
+                    )?,
+                    wecom_webhook_url: required_property(
+                        &values,
+                        &[
+                            "wecom.webhook_url",
+                            "wecom_webhook_url",
+                            "wechat.webhook_url",
+                        ],
+                        "wecom.webhook_url",
+                    )?,
+                };
+
+                let mut cache = LOCAL_CONFIG_CACHE.lock().map_err(|err| err.to_string())?;
+                *cache = Some(config.clone());
+                return Ok(config);
+            }
+            Err(err) => {
+                last_error = Some(format!("{}: {}", candidate.display(), err));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        "Missing local.properties. Create it in the project root and fill in GitCode / WeCom values.".to_string()
+    }))
 }
 
 fn calculate_dir_size(path: &Path) -> u64 {
@@ -263,19 +491,20 @@ fn zip_directory_with_progress(
     Ok(())
 }
 
-fn get_gitcode_config() -> (String, String, String, String, String) {
-    (
-        "znm1145".to_string(),
-        "AU-Launcher-Repo".to_string(),
-        "data".to_string(),
-        "config.json".to_string(),
-        "".to_string(),
-    )
+fn get_gitcode_config() -> Result<(String, String, String, String, String), String> {
+    let config = load_local_config()?;
+    Ok((
+        config.gitcode_owner,
+        config.gitcode_repo,
+        config.gitcode_branch,
+        config.gitcode_config_path,
+        config.gitcode_token,
+    ))
 }
 
 #[tauri::command]
 async fn get_gitcode_file_content(path_in_repo: String) -> Result<GitcodeFileContent, String> {
-    let (owner, repo, branch, _, token) = get_gitcode_config();
+    let (owner, repo, branch, _, token) = get_gitcode_config()?;
     if token.is_empty() {
         return Err("Missing GitCode token".to_string());
     }
@@ -344,14 +573,50 @@ fn normalized_game_key(file_path: &str) -> String {
     }
 }
 
-#[tauri::command]
-async fn launch_game(file_path: String) -> Result<String, String> {
-    let target = PathBuf::from(&file_path);
-    if !target.exists() {
-        return Err(format!("File not found: {}", file_path));
+fn resolve_game_executable_path(path: &Path) -> Result<PathBuf, String> {
+    if path.is_file() {
+        return Ok(path.to_path_buf());
+    }
+    if !path.is_dir() {
+        return Err(format!("Path not found: {}", path.display()));
     }
 
-    let game_key = normalized_game_key(&file_path);
+    let mut queue = VecDeque::new();
+    queue.push_back(path.to_path_buf());
+
+    while let Some(dir) = queue.pop_front() {
+        let entries = fs::read_dir(&dir).map_err(|e| e.to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let file_type = entry.file_type().map_err(|e| e.to_string())?;
+            let entry_path = entry.path();
+
+            if file_type.is_file() {
+                if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
+                    if name.eq_ignore_ascii_case("game.exe") {
+                        return Ok(entry_path);
+                    }
+                }
+            } else if file_type.is_dir() {
+                queue.push_back(entry_path); // 子目录放入队列尾部，实现按层扩展
+            }
+        }
+    }
+
+    Err(format!("在所有层级中未找到 game.exe: {}", path.display()))
+}
+
+#[tauri::command]
+fn find_game_executable(root_path: String) -> Result<String, String> {
+    resolve_game_executable_path(Path::new(&root_path))
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn launch_game(file_path: String) -> Result<String, String> {
+    let target = resolve_game_executable_path(Path::new(&file_path))?;
+
+    let game_key = normalized_game_key(&target.to_string_lossy());
     {
         let mut running_games = RUNNING_GAMES.lock().map_err(|err| err.to_string())?;
         if running_games.contains(&game_key) {
@@ -363,7 +628,7 @@ async fn launch_game(file_path: String) -> Result<String, String> {
     let mut child = {
         #[cfg(target_os = "windows")]
         {
-            Command::new(&file_path)
+            Command::new(&target)
                 .spawn()
                 .map_err(|err| err.to_string())?
         }
@@ -371,7 +636,7 @@ async fn launch_game(file_path: String) -> Result<String, String> {
         #[cfg(not(target_os = "windows"))]
         {
             Command::new("wine")
-                .arg(&file_path)
+                .arg(&target)
                 .spawn()
                 .map_err(|err| err.to_string())?
         }
@@ -694,13 +959,7 @@ async fn export_game(
 
 #[tauri::command]
 fn get_github_config_public() -> PublicGithubConfig {
-    let (owner, repo, branch, config_path, _token) = get_gitcode_config();
-    PublicGithubConfig {
-        owner,
-        repo,
-        branch,
-        config_path,
-    }
+    load_public_github_config()
 }
 
 #[tauri::command]
@@ -709,7 +968,7 @@ async fn increment_remote_highscore(
     snapshot: Option<GithubSnapshot>,
 ) -> HighscoreResult {
     let result: Result<HighscoreResult, String> = async {
-        let (owner, repo, branch, config_path, token) = get_gitcode_config();
+        let (owner, repo, branch, config_path, token) = get_gitcode_config()?;
         if token.is_empty() {
             return Err("Missing GitCode token".to_string());
         }
@@ -890,8 +1149,11 @@ async fn submit_game_application(payload: SubmitGameApplicationPayload) -> Resul
         return Err("game name and download link are required".to_string());
     }
 
-    const WEBHOOK_URL: &str =
-        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=";
+    let config = load_local_config()?;
+    let webhook_url = config.wecom_webhook_url;
+    if webhook_url.trim().is_empty() {
+        return Err("Missing WeCom webhook url".to_string());
+    }
 
     let desc = payload
         .desc
@@ -910,7 +1172,7 @@ async fn submit_game_application(payload: SubmitGameApplicationPayload) -> Resul
         .map_err(|err| err.to_string())?;
 
     let text_res = client
-        .post(WEBHOOK_URL)
+        .post(&webhook_url)
         .header("Content-Type", "application/json")
         .json(&json!({
           "msgtype": "markdown",
@@ -932,7 +1194,7 @@ async fn submit_game_application(payload: SubmitGameApplicationPayload) -> Resul
     let image_md5 = payload.image_md5.unwrap_or_default();
     if !image_base64.is_empty() && !image_md5.is_empty() {
         let image_res = client
-            .post(WEBHOOK_URL)
+            .post(&webhook_url)
             .header("Content-Type", "application/json")
             .json(&json!({
               "msgtype": "image",
@@ -960,6 +1222,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            find_game_executable,
             launch_game,
             get_local_path,
             folder_is_existed,

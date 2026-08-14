@@ -1,6 +1,6 @@
 {
   "name": "au-launcher",
-  "version": "1.3.0",
+  "version": "1.6.0",
   "description": "A UNDERTALE/Deltarune Alternate Universe (AUs) games launcher built with Vue.js and Tauri",
   "author": "znm <znm2500@163.com>",
   "homepage": "https://github.com/znm2500/UT-DR-AU-Launcher",
@@ -20,15 +20,16 @@
     "@tauri-apps/plugin-dialog": "^2.4.2",
     "@tauri-apps/plugin-store": "^2.4.1",
     "axios": "^1.13.4",
+    "opencc-js": "^1.4.1",
     "path-browserify": "^1.0.1",
     "spark-md5": "^3.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@tauri-apps/cli": "^2.8.1",
+    "@types/node": "^22.19.1",
     "@typescript-eslint/eslint-plugin": "^8.46.2",
     "@typescript-eslint/parser": "^8.46.2",
-    "@types/node": "^22.19.1",
     "@vitejs/plugin-vue": "^6.0.2",
     "eslint": "^9.39.1",
     "eslint-plugin-vue": "^10.6.2",

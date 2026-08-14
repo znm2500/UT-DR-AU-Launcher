@@ -10,6 +10,8 @@ import cancelWav from './assets/sfx/cancel.wav'
 import switchWav from './assets/sfx/switch.wav'
 import saveWav from './assets/sfx/save.wav'
 import SparkMD5 from 'spark-md5';
+import OpenCCCn2T from 'opencc-js/cn2t';
+import OpenCCT2Cn from 'opencc-js/t2cn';
 const availableLanguages = [
     { code: 'en', label: 'English' },
     { code: 'zh_Hans', label: '中文（简体）' },
@@ -345,7 +347,7 @@ const searchInput = ref('');
 const GITHUB_GAMES = ref<any[]>([]);
 const CYF_PATH = ref('');
 const userGames = ref<any[]>([]);
-const currentVersion = '1.3.0';
+const currentVersion = '1.5.0';
 const latestVersion = ref('');
 const updateLog = ref<Record<string, string>>({});
 const settings = ref({
@@ -355,7 +357,7 @@ const settings = ref({
     musicDirectory: ''
 });
 const showAnnouncement = ref(false);
-const announcementData = ref({ en: '', zh_Hans: '', zh_Hant: '' });
+const announcementData = ref<LocalizedTextMap>({ en: '', zh: '', zh_Hant: '' });
 const showUpdateModal = ref(false);
 const showExeImportModal = ref(false);
 const showDownloadModal = ref(false);
@@ -421,6 +423,15 @@ const downloadProgress = reactive<{ [key: string]: number }>({});
 const remoteConfigSha = ref('');
 const remoteConfigSnapshot = ref<any>(null);
 const remoteCoverDataMap = ref<Record<string, string>>({});
+const remoteGithubConfig = ref<{
+    owner: string;
+    repo: string;
+    branch: string;
+    configPath: string;
+    githubDataOwner: string;
+    githubDataRepo: string;
+    githubDataBranch: string;
+} | null>(null);
 const isSubmitting = ref(false); // 正在发送中的状态
 const COOLDOWN_MS = 60000;       // 冷却时间：30秒
 const selectedGroup = ref<'all' | 'hot' | 'new'>('all');
@@ -437,14 +448,154 @@ const appBackgroundStyle = computed(() => {
     return {};
 });
 
+type LocalizedTextMap = Record<string, string>;
+const simplifiedToTraditional = OpenCCCn2T.Converter({ from: 'cn', to: 'tw' });
+const traditionalToSimplified = OpenCCT2Cn.Converter({ from: 'tw', to: 'cn' });
+
+
+function convertSimplifiedToTraditional(text: string): string {
+    return simplifiedToTraditional(text);
+}
+
+function convertTraditionalToSimplified(text: string): string {
+    return traditionalToSimplified(text);
+}
+
+function createLocalTextMap(value: string, locale: string): LocalizedTextMap {
+    if (locale === 'zh_Hant') {
+        return {
+            en: value,
+            zh_Hans: value ? convertTraditionalToSimplified(value) : '',
+            zh_Hant: value
+        };
+    }
+
+    if (locale === 'zh_Hans') {
+        return {
+            en: value,
+            zh_Hans: value,
+            zh_Hant: value ? convertSimplifiedToTraditional(value) : ''
+        };
+    }
+
+    return {
+        en: value,
+        zh_Hans: value,
+        zh_Hant: value ? convertSimplifiedToTraditional(value) : ''
+    };
+}
+
+function fillMissingLocalChineseText(source: any): LocalizedTextMap {
+    const localized = { ...(source || {}) } as LocalizedTextMap;
+
+    if (localized.zh && !localized.zh_Hans) {
+        localized.zh_Hans = localized.zh;
+    }
+
+    if (localized.zh_Hant && !localized.zh_Hans) {
+        localized.zh_Hans = convertTraditionalToSimplified(localized.zh_Hant);
+    }
+
+    if (localized.zh_Hans && !localized.zh_Hant) {
+        localized.zh_Hant = convertSimplifiedToTraditional(localized.zh_Hans);
+    }
+
+    return localized;
+}
+
+function normalizeLocalGameTextFields(game: any): any {
+    return {
+        ...game,
+        name: fillMissingLocalChineseText(game.name),
+        author: fillMissingLocalChineseText(game.author),
+        desc: fillMissingLocalChineseText(game.desc)
+    };
+}
+
+function getRawLocalizedText(source: any, locale: string): string {
+    if (!source) return '';
+    if (typeof source === 'string') return source;
+
+    if (locale === 'en') {
+        return source.en || source.zh || source.zh_Hans || source.zh_Hant || '';
+    }
+
+    if (locale === 'zh_Hant') {
+        return source.zh_Hant || (source.zh ? convertSimplifiedToTraditional(source.zh) : '') ||
+            (source.zh_Hans ? convertSimplifiedToTraditional(source.zh_Hans) : '') || source.en || '';
+    }
+
+    return source.zh_Hans || source.zh || source.zh_Hant || source.en || '';
+}
+
+function localizedText(source: any, fallback = ''): string {
+    return getRawLocalizedText(source, currentLang.value) || fallback;
+}
+
+function withRemoteZhFallback(source: any): any {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return source;
+
+    const localized = { ...source } as LocalizedTextMap;
+    if (!localized.zh_Hant) {
+        if (localized.zh) {
+            localized.zh_Hant = convertSimplifiedToTraditional(localized.zh);
+        }
+    }
+    return localized;
+}
+
+function normalizeRemoteLocalizedFields(data: any): any {
+    if (!data) return data;
+
+    const normalized = { ...data };
+    normalized.update_log = withRemoteZhFallback(data.update_log || {});
+    normalized.announcement = withRemoteZhFallback(data.announcement || {});
+    normalized.games = Array.isArray(data.games)
+        ? data.games.map((game: any) => ({
+            ...game,
+            name: withRemoteZhFallback(game.name),
+            author: withRemoteZhFallback(game.author),
+            desc: withRemoteZhFallback(game.desc)
+        }))
+        : data.games;
+
+    return normalized;
+}
+
+function stripRemoteGeneratedLocaleFields(source: any): any {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return source;
+
+    const cleaned = { ...source } as LocalizedTextMap;
+    if (cleaned.zh && cleaned.zh_Hant === convertSimplifiedToTraditional(cleaned.zh)) {
+        delete cleaned.zh_Hant;
+    }
+    return cleaned;
+}
+
+function serializeRemoteGameForLocalStore(game: any): any {
+    return {
+        ...game,
+        name: stripRemoteGeneratedLocaleFields(game.name),
+        author: stripRemoteGeneratedLocaleFields(game.author),
+        desc: stripRemoteGeneratedLocaleFields(game.desc)
+    };
+}
+
 function getRemoteCoverCandidates(gameId: string): string[] {
     const gitcodeApiUrl = remoteCoverDataMap.value[gameId] || '';
-    const jsdelivrUrl = `https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/${gameId}.webp`;
-    const githubRawUrl = `https://raw.githubusercontent.com/znm2500/AU-Launcher-Repo/data/${gameId}.webp`;
+    const githubCfg = remoteGithubConfig.value;
+    const jsdelivrUrl = githubCfg
+        ? `https://cdn.jsdelivr.net/gh/${githubCfg.githubDataOwner}/${githubCfg.githubDataRepo}@${githubCfg.githubDataBranch}/${gameId}.webp`
+        : '';
+    const githubRawUrl = githubCfg
+        ? `https://raw.githubusercontent.com/${githubCfg.githubDataOwner}/${githubCfg.githubDataRepo}/${githubCfg.githubDataBranch}/${gameId}.webp`
+        : '';
 
-    return gitcodeApiUrl
-        ? [gitcodeApiUrl, jsdelivrUrl, githubRawUrl]
-        : [jsdelivrUrl, githubRawUrl];
+    const fallbackUrls = [jsdelivrUrl, githubRawUrl].filter(Boolean);
+
+    return isChinaIP.value && gitcodeApiUrl
+        ? [gitcodeApiUrl, ...fallbackUrls]
+        : fallbackUrls;
 }
 
 function base64ToUtf8String(b64: string): string {
@@ -547,7 +698,8 @@ async function fetchConfigWithFallback(urls: string[]): Promise<any> {
 }
 
 async function fetchConfigFromGitcodeApi(): Promise<any> {
-    const githubCfg = await api.getGithubConfigPublic();
+    const githubCfg = remoteGithubConfig.value || await api.getGithubConfigPublic();
+    remoteGithubConfig.value = githubCfg;
     const remoteFile = await api.getGitcodeFileContent(githubCfg.configPath);
     const content = base64ToUtf8String(String(remoteFile.content || ''));
     const data = JSON.parse(content);
@@ -563,10 +715,13 @@ async function fetchConfigFromGitcodeApi(): Promise<any> {
 }
 
 function buildDownloadUrls(version: string, gameId: string): string[] {
+    const githubCfg = remoteGithubConfig.value;
     const gitcodeUrl = `https://gitcode.com/znm1145/AU-Launcher-Repo/releases/download/v${version}/${gameId}.7z`;
-    const githubUrl = `https://github.com/znm2500/AU-Launcher-Repo/releases/download/v${version}/${gameId}.7z`;
+    const githubUrl = githubCfg
+        ? `https://github.com/${githubCfg.githubDataOwner}/${githubCfg.githubDataRepo}/releases/download/v${version}/${gameId}.7z`
+        : '';
 
-    return isChinaIP.value ? [gitcodeUrl, githubUrl] : [githubUrl, gitcodeUrl];
+    return isChinaIP.value ? [gitcodeUrl, githubUrl].filter(Boolean) : [githubUrl, gitcodeUrl].filter(Boolean);
 }
 
 async function downloadGameWithFallback(urls: string[], destDir: string, filename: string, gameId: string): Promise<void> {
@@ -636,7 +791,8 @@ function getHeatScore(game: any): number {
 
 async function refreshGithubSnapshot() {
     try {
-        const githubCfg = await api.getGithubConfigPublic();
+        const githubCfg = remoteGithubConfig.value || await api.getGithubConfigPublic();
+        remoteGithubConfig.value = githubCfg;
         const data = await api.getGitcodeFileContent(githubCfg.configPath);
         const content = base64ToUtf8String(String(data.content || ''));
         remoteConfigSnapshot.value = JSON.parse(content);
@@ -877,7 +1033,11 @@ function selectGame(index: number) {
 
 function goToDownload() {
     playSfx('confirm');
-    api.openExternal(isChinaIP.value ? 'https://gitcode.com/znm1145/UT-DR-AU-Launcher/releases' : 'https://github.com/znm2500/UT-DR-AU-Launcher/releases');
+    const githubCfg = remoteGithubConfig.value;
+    const githubReleaseUrl = githubCfg
+        ? `https://github.com/${githubCfg.githubDataOwner}/${githubCfg.githubDataRepo}/releases`
+        : 'https://github.com/';
+    api.openExternal(isChinaIP.value ? 'https://gitcode.com/znm1145/UT-DR-AU-Launcher/releases' : githubReleaseUrl);
     showUpdateModal.value = false;
 }
 
@@ -1021,13 +1181,13 @@ async function handleAction() {
 
             game_temp.type = 'local';
             game_temp.playable = true;
-            game_temp.execution_path = path.normalize(game_temp.version == "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : path.join(settings.value.downloadPath, game_temp.id, "game.exe"));
+            game_temp.execution_path = path.normalize(game_temp.version == "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : await api.findGameExecutable(path.join(settings.value.downloadPath, game_temp.id)));
             const existingIndex = userGames.value.findIndex(g => g.id === game_temp.id);
             if (existingIndex !== -1) {
                 userGames.value.splice(existingIndex, 1);
             }
             // 使用深拷贝断开引用
-            userGames.value.unshift(JSON.parse(JSON.stringify(game_temp)));
+            userGames.value.unshift(JSON.parse(JSON.stringify(serializeRemoteGameForLocalStore(game_temp))));
 
             downloadIdSet.delete(game_temp.id);
             delete downloadProgress[game_temp.id];
@@ -1144,20 +1304,12 @@ function handleExeImportImageSelect(e: Event) {
 async function confirmExeImport() {
     if (!exeImportForm.name || !exeImportForm.path) return;
 
-    const newGameNames: { [key: string]: string } = {};
-    for (const lang of Object.keys(I18N)) {
-        newGameNames[lang] = exeImportForm.name;
-    }
     const newGame = {
         id: `local${crypto.randomUUID()}`,
-        name: newGameNames,
+        name: createLocalTextMap(exeImportForm.name, currentLang.value),
         type: 'local',
         playable: true,
-        author: {
-            en: exeImportForm.author,
-            zh_Hans: exeImportForm.author,
-            zh_Hant: exeImportForm.author
-        },
+        author: createLocalTextMap(exeImportForm.author, currentLang.value),
         engine: exeImportForm.engine,
         execution_path: exeImportForm.path,
         img: defaultCover
@@ -1189,14 +1341,10 @@ async function confirmCyfImport() {
 
     const newGame = {
         id: `local${crypto.randomUUID()}`,
-        name: { en: exeImportForm.name, zh_Hans: exeImportForm.name, zh_Hant: exeImportForm.name },
+        name: createLocalTextMap(exeImportForm.name, currentLang.value),
         type: 'local',
         playable: true,
-        author: {
-            en: exeImportForm.author,
-            zh_Hans: exeImportForm.author,
-            zh_Hant: exeImportForm.author
-        },
+        author: createLocalTextMap(exeImportForm.author, currentLang.value),
         engine: exeImportForm.engine,
         execution_path: path.normalize(path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe")),
         img: defaultCover,
@@ -1315,7 +1463,7 @@ async function performAupImport() {
 
             await api.moveFolder(path.join(tmpAupDir.value, g.id), destDir);
 
-            const newG = { ...g, execution_path: newExecPath };
+            const newG = normalizeLocalGameTextFields({ ...g, execution_path: newExecPath });
             if (userGamesMap.has(g.id)) {
                 userGames.value[userGamesMap.get(g.id) as number] = newG;
             } else {
@@ -1454,11 +1602,11 @@ function openSettings() {
     settingsForm.musicDirectory = settings.value.musicDirectory;
     settingsForm.lang = settings.value.lang;
     if (activeGame.value) {
-        settingsForm.name = activeGame.value.name[currentLang.value] || activeGame.value.name['en'] || '';
+        settingsForm.name = localizedText(activeGame.value.name);
         settingsForm.gamePath = activeGame.value.execution_path;
         settingsForm.imageName = activeGame.value.img ? lang.value.settings_image_current : lang.value.settings_image_not_chosen;
         if (activeGame.value.id.includes('local')) {
-            settingsForm.author = activeGame.value.author[currentLang.value] || activeGame.value.author['en'] || '';
+            settingsForm.author = localizedText(activeGame.value.author);
             settingsForm.engine = activeGame.value.engine || '';
         }
     }
@@ -1492,6 +1640,7 @@ async function saveSettings() {
                 // 名字修改
                 if (activeGame.value.name[currentLang.value] !== settingsForm.name) {
                     activeGame.value.name[currentLang.value] = settingsForm.name;
+                    activeGame.value.name = fillMissingLocalChineseText(activeGame.value.name);
                     gameUpdated = true;
                 }
                 // 路径修改
@@ -1512,6 +1661,7 @@ async function saveSettings() {
                     // 作者修改
                     if (activeGame.value.author[currentLang.value] !== settingsForm.author) {
                         activeGame.value.author[currentLang.value] = settingsForm.author;
+                        activeGame.value.author = fillMissingLocalChineseText(activeGame.value.author);
                         gameUpdated = true;
                     }
                     // 引擎修改
@@ -1705,6 +1855,7 @@ onMounted(async () => {
     try {
         // 0. 初始化基础功能
         initSfx();
+        remoteGithubConfig.value = await api.getGithubConfigPublic();
         api.onDownloadProgress((data: { id: string, percent: number }) => {
             downloadProgress[data.id] = data.percent;
         });
@@ -1722,7 +1873,7 @@ onMounted(async () => {
         }).catch((err) => { console.error(err) });
         const pCyfpath = api.getStoreValue('cyfpath', '');
         // 2. 等待所有本地数据返回 (这是最快的 IO 方式)
-        const pIgnoredVersion = api.getStoreValue('ignoredVersion', '1.3.0');
+        const pIgnoredVersion = api.getStoreValue('ignoredVersion', '1.5.0');
 
         const [games, savedSettings, savedIgnoredVersion, savedCyfPath] = await Promise.all([
             pGames, pSettings, pIgnoredVersion, pCyfpath
@@ -1768,7 +1919,8 @@ onMounted(async () => {
     // ============================================================
     const cachedConfig = loadRemoteConfigCache();
     if (cachedConfig) {
-        GITHUB_GAMES.value = cachedConfig.games;
+        const normalizedCachedConfig = normalizeRemoteLocalizedFields(cachedConfig);
+        GITHUB_GAMES.value = normalizedCachedConfig.games;
     }
 
     (async () => {
@@ -1779,40 +1931,47 @@ onMounted(async () => {
             isChinaIP.value = ipCheckResult;
             console.log('IP check result:', ipCheckResult);
             let data: any | null = null;
-            try {
-                data = await fetchConfigFromGitcodeApi();
-            } catch (err) {
-                console.warn('Failed to load GitCode config via API:', err);
+            if (isChinaIP.value) {
+                try {
+                    data = await fetchConfigFromGitcodeApi();
+                } catch (err) {
+                    console.warn('Failed to load GitCode config via API:', err);
+                }
             }
 
             if (!data) {
+                const githubCfg = remoteGithubConfig.value;
+                const githubConfigUrl = githubCfg
+                    ? `https://raw.githubusercontent.com/${githubCfg.githubDataOwner}/${githubCfg.githubDataRepo}/${githubCfg.githubDataBranch}/config.json`
+                    : '';
                 const configCandidates = [
-                    'https://cdn.jsdelivr.net/gh/znm2500/AU-Launcher-Repo@data/config.json',
-                    'https://raw.githubusercontent.com/znm2500/AU-Launcher-Repo/data/config.json'
-                ];
+                    githubCfg ? `https://cdn.jsdelivr.net/gh/${githubCfg.githubDataOwner}/${githubCfg.githubDataRepo}@${githubCfg.githubDataBranch}/config.json` : '',
+                    githubConfigUrl
+                ].filter(Boolean);
 
                 data = await fetchConfigWithFallback(configCandidates);
             }
 
-            GITHUB_GAMES.value = data.games;
+            const normalizedData = normalizeRemoteLocalizedFields(data);
+            GITHUB_GAMES.value = normalizedData.games;
             saveRemoteConfigCache(data);
 
-            await refreshGithubSnapshot();
             if (isChinaIP.value) {
-                await hydrateRemoteCoverCache(data.games || []);
+                await refreshGithubSnapshot();
+                await hydrateRemoteCoverCache(normalizedData.games || []);
             }
-            if (data.newest_version !== currentVersion && data.newest_version !== ignoredVersion) {
-                latestVersion.value = data.newest_version;
-                updateLog.value = data.update_log || {};
+            if (normalizedData.newest_version !== currentVersion && normalizedData.newest_version !== ignoredVersion) {
+                latestVersion.value = normalizedData.newest_version;
+                updateLog.value = normalizedData.update_log || {};
                 showUpdateModal.value = true;
             }
             const lastReadIndex = await api.getStoreValue('last_announcement_index', '');
 
             // 如果服务器公告索引不为 0 且 与本地保存的不一致，则显示弹窗
-            if (data.announcement?.en !== lastReadIndex && data.announcement?.en) {
-                announcementData.value = data.announcement || { en: '', zh_Hans: '', zh_Hant: '' };
+            if (normalizedData.announcement?.en !== lastReadIndex && normalizedData.announcement?.en) {
+                announcementData.value = normalizedData.announcement || { en: '', zh: '', zh_Hant: '' };
                 showAnnouncement.value = true;
-                announcementIndex = data.announcement?.en;
+                announcementIndex = normalizedData.announcement?.en;
             }
 
         } catch (error: any) {
@@ -1833,7 +1992,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-    <div id="app" :style="appBackgroundStyle">
+    <div id="app" :style="appBackgroundStyle" :class="{ 'lang-en': currentLang === 'en' }">
         <div class="top-bar">
 
             <input type="text" v-model="searchInput" class="search-input" :placeholder="lang.search" />
@@ -1864,9 +2023,9 @@ onUnmounted(() => {
                 <div class="card-left">
                     <img :src="soulIcon" class="soul-icon" draggable="false" />
                     <div class="info-box">
-                        <div class="name">{{ game.name[currentLang] || game.name['en'] }}</div>
+                        <div class="name">{{ localizedText(game.name) }}</div>
                         <div class="game-meta" style="font-size: 0.9rem; color: #bbb; margin-bottom: 8px;">
-                            <span v-if="game.author">by {{ game.author[currentLang] || game.author['en'] }}</span>
+                            <span v-if="game.author">by {{ localizedText(game.author) }}</span>
                             <span v-if="game.engine" style="margin-left: 10px; color: #888;">[{{ game.engine }}]</span>
                         </div>
                         <div :key="force_render_key" :class="['status',
@@ -1976,7 +2135,7 @@ onUnmounted(() => {
                     <div class="confirm-body"
                         style="margin: 20px 0; overflow-y: auto; text-align: left; line-height: 1.6; font-size: 1.1rem; white-space: pre-wrap;">
                         <div class="changelog-container">
-                            {{ announcementData[currentLang] || announcementData['en'] }}
+                            {{ localizedText(announcementData) }}
                         </div>
                     </div>
 
@@ -1999,7 +2158,7 @@ onUnmounted(() => {
                         {{ lang.update_msg }} <span style="color: #00FF00;">{{ latestVersion }}</span>
 
                         <div class="changelog-container">
-                            <pre class="changelog-text">{{ updateLog[currentLang] || updateLog['en'] }}</pre>
+                            <pre class="changelog-text">{{ localizedText(updateLog) }}</pre>
                         </div>
                     </div>
                     <div class="confirm-actions" style="flex-direction: column; gap: 15px;">
@@ -2215,7 +2374,7 @@ onUnmounted(() => {
                                 :class="['export-item', { selected: selectedAupIds.has(g.id) }]"
                                 @click="playSfx('switch'); selectedAupIds.has(g.id) ? selectedAupIds.delete(g.id) : selectedAupIds.add(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedAupIds.has(g.id) ? '[x]' : '[ ]' }}</span>
-                                {{ g.name[currentLang] || g.name['en'] }}
+                                {{ localizedText(g.name) }}
                             </div>
                         </div>
                     </div>
@@ -2237,7 +2396,7 @@ onUnmounted(() => {
             <div v-if="showConfirmDelete" id="confirm-overlay">
                 <div class="confirm-card">
                     <div class="confirm-body">{{ lang.confirm_del }} <span id="confirm-game-name">{{
-                        activeGame ? activeGame.name[currentLang] || activeGame.name['en'] : '' }}</span>?</div>
+                        activeGame ? localizedText(activeGame.name) : '' }}</span>?</div>
                     <div class="confirm-actions">
                         <div class="btn enabled" @click="performDelete">{{ lang.confirm_yes }}</div>
                         <div class="btn" @click="cancelDelete">{{ lang.confirm_no }}</div>
@@ -2265,7 +2424,7 @@ onUnmounted(() => {
                                 @click="toggleExportSelection(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
                                     }}</span>
-                                {{ g.name[currentLang] || g.name['en'] }}
+                                {{ localizedText(g.name) }}
                             </div>
                         </div>
                     </div>
@@ -2428,6 +2587,27 @@ onUnmounted(() => {
     overflow: hidden;
     user-select: none;
     transition: background-image 0.5s ease-in-out;
+}
+
+#app.lang-en {
+    letter-spacing: 0.06em;
+}
+
+#app.lang-en .search-input,
+#app.lang-en .submit-btn,
+#app.lang-en .group-tab,
+#app.lang-en .btn,
+#app.lang-en .settings-title,
+#app.lang-en .error-title,
+#app.lang-en .cyf-header,
+#app.lang-en .load-more-btn,
+#app.lang-en .info-box .name,
+#app.lang-en .info-box .status,
+#app.lang-en .cyf-content p,
+#app.lang-en .settings-body label,
+#app.lang-en .error-body,
+#app.lang-en .changelog-text {
+    letter-spacing: 0.06em;
 }
 
 /* --- Vue 过渡动画 --- */

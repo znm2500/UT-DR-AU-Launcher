@@ -27,6 +27,10 @@ const api = {
         return invoke<string>('launch_game', { filePath: path })
     },
 
+    async findGameExecutable(rootPath: string): Promise<string> {
+        return invoke<string>('find_game_executable', { rootPath })
+    },
+
     async downloadGame(url: string, destDir: string, filename: string, gameId: string): Promise<boolean> {
         return invoke<boolean>('download_and_extract', {
             downloadUrl: url,
@@ -162,8 +166,24 @@ const api = {
         await invoke('rename_directory', { oldPath, newName })
     },
 
-    async getGithubConfigPublic(): Promise<{ owner: string; repo: string; branch: string; configPath: string }> {
-        return invoke<{ owner: string; repo: string; branch: string; configPath: string }>('get_github_config_public')
+    async getGithubConfigPublic(): Promise<{
+        owner: string
+        repo: string
+        branch: string
+        configPath: string
+        githubDataOwner: string
+        githubDataRepo: string
+        githubDataBranch: string
+    }> {
+        return invoke<{
+            owner: string
+            repo: string
+            branch: string
+            configPath: string
+            githubDataOwner: string
+            githubDataRepo: string
+            githubDataBranch: string
+        }>('get_github_config_public')
     },
 
     async getGitcodeFileContent(pathInRepo: string): Promise<{ content: string; sha: string }> {

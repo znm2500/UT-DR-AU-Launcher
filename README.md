@@ -54,6 +54,22 @@ A modern, feature-rich game launcher designed for _UNDERTALE_ and _Deltarune_ Al
 - Removed duplicated Rust error mapping in game launch flow.
 - Kept behavior unchanged while reducing noise for future maintenance.
 
+## Private Config
+
+Create a `local.properties` file in the repository root for private values such as the GitCode access token and the WeCom webhook URL. The file is ignored by git, and `local.properties.example` shows the expected keys:
+
+- `gitcode.owner`
+- `gitcode.repo`
+- `gitcode.branch`
+- `gitcode.config_path`
+- `gitcode.token`
+- `github.data_owner`
+- `github.data_repo`
+- `github.data_branch`
+- `github.release_owner`
+- `github.release_repo`
+- `wecom.webhook_url`
+
 ---
 
 # UT/DR AU 启动器
@@ -111,3 +127,19 @@ A modern, feature-rich game launcher designed for _UNDERTALE_ and _Deltarune_ Al
 - 移除了历史遗留调试日志与测试 IPC 监听。
 - 清理了 Rust 启动流程中的重复错误映射代码。
 - 保持行为不变，降低后续维护噪音。
+
+## 私有配置
+
+请在仓库根目录创建 `local.properties` 来保存 GitCode 访问令牌和企业微信 webhook。该文件已被 git 忽略，`local.properties.example` 提供了字段示例：
+
+- `gitcode.owner`
+- `gitcode.repo`
+- `gitcode.branch`
+- `gitcode.config_path`
+- `gitcode.token`
+- `github.data_owner`
+- `github.data_repo`
+- `github.data_branch`
+- `github.release_owner`
+- `github.release_repo`
+- `wecom.webhook_url`
