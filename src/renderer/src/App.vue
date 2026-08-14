@@ -10,11 +10,14 @@ import cancelWav from './assets/sfx/cancel.wav'
 import switchWav from './assets/sfx/switch.wav'
 import saveWav from './assets/sfx/save.wav'
 import SparkMD5 from 'spark-md5';
+import OpenCC from 'opencc-js';
 const availableLanguages = [
     { code: 'en', label: 'English' },
     { code: 'zh_Hans', label: '中文（简体）' },
     { code: 'zh_Hant', label: '中文（繁體）' }
 ];
+
+const convertSimplifiedToTraditional = OpenCC.Converter({ from: 'cn', to: 'tw' });
 
 // --- I18N (保持不变) ---
 const I18N = {
@@ -345,7 +348,7 @@ const searchInput = ref('');
 const GITHUB_GAMES = ref<any[]>([]);
 const CYF_PATH = ref('');
 const userGames = ref<any[]>([]);
-const currentVersion = '1.3.0';
+const currentVersion = '1.6.0';
 const latestVersion = ref('');
 const updateLog = ref<Record<string, string>>({});
 const settings = ref({
@@ -474,6 +477,64 @@ function base64ToUtf8String(b64: string): string {
     return new TextDecoder('utf-8').decode(bytes);
 }
 
+function isPlainObject(value: unknown): value is Record<string, any> {
+    return Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function normalizeLocalizedRecord(record: Record<string, any>): Record<string, any> {
+    const next: Record<string, any> = {};
+
+    for (const [key, value] of Object.entries(record)) {
+        if (Array.isArray(value)) {
+            next[key] = value.map((item) => (isPlainObject(item) ? normalizeLocalizedRecord(item) : item));
+        } else if (isPlainObject(value)) {
+            next[key] = normalizeLocalizedRecord(value);
+        } else {
+            next[key] = value;
+        }
+    }
+
+    const simplified = typeof next.zh === 'string' ? next.zh : '';
+    const zhHans = typeof next.zh_Hans === 'string' && next.zh_Hans.trim() !== ''
+        ? next.zh_Hans
+        : simplified;
+    const zhHant = typeof next.zh_Hant === 'string' && next.zh_Hant.trim() !== ''
+        ? next.zh_Hant
+        : (zhHans ? convertSimplifiedToTraditional(zhHans) : '');
+
+    if (simplified || zhHans || zhHant) {
+        if (!next.zh && zhHans) {
+            next.zh = zhHans;
+        }
+        if (zhHans) {
+            next.zh_Hans = zhHans;
+        }
+        if (zhHant) {
+            next.zh_Hant = zhHant;
+        }
+    }
+
+    return next;
+}
+
+function normalizeRemoteConfig(data: any): any {
+    if (!isPlainObject(data)) {
+        return data;
+    }
+
+    const next = normalizeLocalizedRecord(data);
+    if (Array.isArray(next.games)) {
+        next.games = next.games.map((game: any) => (isPlainObject(game) ? normalizeLocalizedRecord(game) : game));
+    }
+    if (isPlainObject(next.announcement)) {
+        next.announcement = normalizeLocalizedRecord(next.announcement);
+    }
+    if (isPlainObject(next.update_log)) {
+        next.update_log = normalizeLocalizedRecord(next.update_log);
+    }
+    return next;
+}
+
 function handleCoverLoadError(game: any) {
     const candidates = Array.isArray(game._imgCandidates) ? game._imgCandidates : [];
     const currentIndex = Number(game._imgTryIndex ?? 0);
@@ -503,7 +564,7 @@ function loadRemoteConfigCache(): any | null {
         if (!data || !Array.isArray(data.games)) return null;
         if (timestamp > 0 && (Date.now() - timestamp > CONFIG_CACHE_MAX_AGE_MS)) return null;
 
-        return data;
+        return normalizeRemoteConfig(data);
     } catch (err) {
         console.warn('Failed to read config cache:', err);
         return null;
@@ -549,7 +610,7 @@ async function fetchConfigWithFallback(urls: string[]): Promise<any> {
                 continue;
             }
 
-            return data;
+            return normalizeRemoteConfig(data);
         } catch (err) {
             lastError = err;
         } finally {
@@ -574,7 +635,7 @@ async function fetchConfigFromGitcodeApi(): Promise<any> {
     remoteConfigSnapshot.value = data;
     remoteConfigSha.value = String(remoteFile.sha || '');
 
-    return data;
+    return normalizeRemoteConfig(data);
 }
 
 function buildDownloadUrls(version: string, gameId: string): string[] {
@@ -2061,7 +2122,7 @@ onUnmounted(() => {
             <div v-if="showImportTypeModal" id="import-type-overlay">
                 <div class="confirm-card" style="width: 480px;">
                     <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title
-                    }} ]
+                        }} ]
                     </div>
                     <div class="confirm-actions"
                         style="flex-direction: column; align-items: flex-start; gap: 20px; padding: 0 20px;">
@@ -2069,10 +2130,10 @@ onUnmounted(() => {
                             lang.import_method_exe }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{
                             lang.import_method_aup
-                        }}</div>
+                            }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importCyfMod">{{
                             lang.import_method_cyf
-                        }}</div>
+                            }}</div>
                         <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
                         <div class="btn" style="align-self: center;"
                             @click="showImportTypeModal = false; playSfx('cancel');">{{
@@ -2308,7 +2369,7 @@ onUnmounted(() => {
                                 :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
                                 @click="toggleExportSelection(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
-                                }}</span>
+                                    }}</span>
                                 {{ g.name[currentLang] || g.name['en'] }}
                             </div>
                         </div>
@@ -2342,10 +2403,10 @@ onUnmounted(() => {
                         <div style="display:flex;gap:8px;align-items:center;">
                             <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
                                 lang.settings_choose_image
-                            }}</label>
+                                }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                                 settingsForm.bgImageName
-                            }}</div>
+                                }}</div>
                         </div>
                         <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />
