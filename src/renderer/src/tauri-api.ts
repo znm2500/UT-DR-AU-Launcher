@@ -94,6 +94,10 @@ const api = {
         await invoke('move_folder', { archivePath, destDir })
     },
 
+    async findExecutable(rootDir: string): Promise<string> {
+        return invoke<string>('find_executable', { rootDir })
+    },
+
     async saveFile(name: string, extensions: string[]): Promise<string | null> {
         const selected = await save({
             filters: [{ name, extensions }]

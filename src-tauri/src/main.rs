@@ -7,15 +7,15 @@ use maxminddb::geoip2;
 use public_ip;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
+use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Emitter, Manager};
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -305,6 +305,70 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn find_executable(root_dir: String) -> Result<String, String> {
+    let root = PathBuf::from(root_dir);
+    if !root.is_dir() {
+        return Err(format!("game directory not found: {}", root.display()));
+    }
+
+    let mut queue = VecDeque::from([root.clone()]);
+
+    while let Some(dir) = queue.pop_front() {
+        let mut child_dirs = Vec::new();
+        let mut executable_paths = Vec::new();
+
+        let entries = fs::read_dir(&dir)
+            .map_err(|err| format!("failed to read directory {}: {}", dir.display(), err))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|err| err.to_string())?;
+            let path = entry.path();
+            let file_type = entry.file_type().map_err(|err| err.to_string())?;
+
+            if file_type.is_dir() {
+                child_dirs.push(path);
+                continue;
+            }
+
+            let is_executable = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(|extension| extension.eq_ignore_ascii_case("exe"))
+                .unwrap_or(false);
+
+            if is_executable {
+                executable_paths.push(path);
+            }
+        }
+
+        executable_paths.sort_by_key(|path| {
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+
+            (
+                if file_name == "game.exe" { 0 } else { 1 },
+                path.to_string_lossy().to_ascii_lowercase(),
+            )
+        });
+
+        if let Some(executable_path) = executable_paths.first() {
+            return Ok(executable_path.to_string_lossy().to_string());
+        }
+
+        child_dirs.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase());
+        queue.extend(child_dirs);
+    }
+
+    Err(format!(
+        "no executable found in game directory: {}",
+        root.display()
+    ))
+}
+
 fn detect_archive_kind(archive_path: &Path) -> Result<ArchiveKind, String> {
     let mut file = File::open(archive_path).map_err(|err| err.to_string())?;
     let mut header = [0_u8; 8];
@@ -331,10 +395,16 @@ fn detect_archive_kind(archive_path: &Path) -> Result<ArchiveKind, String> {
         .to_ascii_lowercase();
 
     if ext == "7z" || ext == "aup" {
-        return Ok(ArchiveKind::SevenZ);
+        return Err(format!(
+            "invalid 7z archive: {}",
+            archive_path.to_string_lossy()
+        ));
     }
     if ext == "zip" {
-        return Ok(ArchiveKind::Zip);
+        return Err(format!(
+            "invalid zip archive: {}",
+            archive_path.to_string_lossy()
+        ));
     }
 
     Err(format!(
@@ -371,15 +441,79 @@ fn extract_zip(archive_path: &Path, output_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn extract_7z(archive_path: &Path, output_dir: &Path) -> Result<(), String> {
-    fs::create_dir_all(output_dir).map_err(|err| err.to_string())?;
-    sevenz_rust::decompress_file(archive_path, output_dir).map_err(|err| err.to_string())
+fn bundled_7za_path(app: &AppHandle) -> Result<PathBuf, String> {
+    const RESOURCE_PATH: &str = "resources/7zip/7za.exe";
+
+    let bundled_path = app
+        .path()
+        .resolve(RESOURCE_PATH, BaseDirectory::Resource)
+        .map_err(|err| format!("failed to resolve bundled 7za path: {}", err))?;
+
+    if bundled_path.is_file() {
+        return Ok(bundled_path);
+    }
+
+    let development_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(RESOURCE_PATH);
+    if development_path.is_file() {
+        return Ok(development_path);
+    }
+
+    Err(format!(
+        "bundled 7za executable is missing: {}",
+        bundled_path.to_string_lossy()
+    ))
 }
 
-fn extract_archive(archive_path: &Path, output_dir: &Path) -> Result<(), String> {
+fn extract_7z(app: &AppHandle, archive_path: &Path, output_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(output_dir).map_err(|err| err.to_string())?;
+    let seven_zip_path = bundled_7za_path(app)?;
+
+    let output = Command::new(&seven_zip_path)
+        .arg("x")
+        .arg("-y")
+        .arg("-aoa")
+        .arg(format!("-o{}", output_dir.to_string_lossy()))
+        .arg(archive_path)
+        .output()
+        .map_err(|err| {
+            format!(
+                "failed to run bundled 7za at {}: {}",
+                seven_zip_path.to_string_lossy(),
+                err
+            )
+        })?;
+
+    if !output.status.success() {
+        let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if output.status.code() == Some(2) {
+            if details.is_empty() {
+                return Err(format!(
+                    "archive source invalid: 7za failed with status {}",
+                    output.status
+                ));
+            }
+            return Err(format!(
+                "archive source invalid: 7za failed with status {}: {}",
+                output.status, details
+            ));
+        }
+        if details.is_empty() {
+            return Err(format!("7za failed with status {}", output.status));
+        }
+        return Err(format!("7za failed with status {}: {}", output.status, details));
+    }
+
+    Ok(())
+}
+
+fn extract_archive(
+    app: &AppHandle,
+    archive_path: &Path,
+    output_dir: &Path,
+) -> Result<(), String> {
     match detect_archive_kind(archive_path)? {
         ArchiveKind::Zip => extract_zip(archive_path, output_dir),
-        ArchiveKind::SevenZ => extract_7z(archive_path, output_dir),
+        ArchiveKind::SevenZ => extract_7z(app, archive_path, output_dir),
     }
 }
 
@@ -706,23 +840,23 @@ async fn download_and_extract(
         .get(&download_url)
         .send()
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|err| format!("download request failed: {}", err))?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "download failed with status: {}",
-            response.status()
-        ));
+        return Err(format!("download failed with status: {}", response.status()));
     }
 
     let total_length = response.content_length().unwrap_or(0);
     let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
-    let mut writer = File::create(&save_path).map_err(|err| err.to_string())?;
+    let mut writer = File::create(&save_path)
+        .map_err(|err| format!("download file create failed: {}", err))?;
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|err| err.to_string())?;
-        writer.write_all(&chunk).map_err(|err| err.to_string())?;
+        let chunk = chunk.map_err(|err| format!("download stream failed: {}", err))?;
+        writer
+            .write_all(&chunk)
+            .map_err(|err| format!("download write failed: {}", err))?;
         downloaded += chunk.len() as u64;
 
         if total_length > 0 {
@@ -731,13 +865,30 @@ async fn download_and_extract(
                 "download-progress",
                 json!({
                   "id": game_id,
-                  "percent": percent.min(100)
+                  "percent": percent.min(99)
                 }),
             );
         }
     }
 
-    extract_archive(&save_path, Path::new(&dest_dir))?;
+    writer
+        .flush()
+        .map_err(|err| format!("download flush failed: {}", err))?;
+    drop(writer);
+
+    if let Err(err) = extract_archive(&app, &save_path, Path::new(&dest_dir)) {
+        let lower = err.to_ascii_lowercase();
+        let is_invalid_source = lower.contains("archive source invalid")
+            || lower.contains("invalid 7z archive")
+            || lower.contains("invalid zip archive")
+            || lower.contains("unsupported archive format");
+        let _ = fs::remove_file(&save_path);
+
+        if is_invalid_source {
+            return Err(format!("download source invalid: {}", err));
+        }
+        return Err(format!("extract failed: {}", err));
+    }
     let _ = app.emit(
         "download-progress",
         json!({
@@ -756,7 +907,7 @@ async fn parse_aup(app: AppHandle, archive_path: String) -> Result<ParseAupResul
         std::env::temp_dir().join(format!("au_export_{}_{}", now_millis(), std::process::id()));
 
     fs::create_dir_all(&temp_dir).map_err(|err| err.to_string())?;
-    extract_archive(Path::new(&archive_path), &temp_dir)?;
+    extract_archive(&app, Path::new(&archive_path), &temp_dir)?;
 
     let config_path = temp_dir.join("config.json");
     let json_raw = fs::read_to_string(config_path).map_err(|err| err.to_string())?;
@@ -1143,6 +1294,7 @@ fn main() {
             read_bgm_files,
             rename_directory,
             move_folder,
+            find_executable,
             remove_directory,
             download_and_extract,
             parse_aup,

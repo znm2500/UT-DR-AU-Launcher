@@ -44,7 +44,7 @@ A modern, feature-rich game launcher designed for _UNDERTALE_ and _Deltarune_ Al
   - `axios`: For network requests and game downloads.
   - `@tauri-apps/api`: For frontend-to-native command invocation and path/dialog access.
   - `@tauri-apps/plugin-dialog` / `@tauri-apps/plugin-store`: For native dialogs and persistent local settings.
-  - Rust side (`reqwest`, `zip`, `sevenz-rust`): For download, extraction, and export workflows.
+  - Rust side (`reqwest`, `zip`, bundled `7za`): For download, extraction, and export workflows.
 
 ---
 
@@ -118,7 +118,7 @@ Create a `local.properties` file in the repository root for private values such 
   - `axios`: 用于网络请求和游戏下载。
   - `@tauri-apps/api`: 用于前端调用原生命令、路径与系统能力。
   - `@tauri-apps/plugin-dialog` / `@tauri-apps/plugin-store`: 用于系统对话框与本地持久化配置。
-  - Rust 侧 (`reqwest`, `zip`, `sevenz-rust`): 用于下载、解压与导出流程。
+  - Rust 侧 (`reqwest`, `zip`, 内置 `7za`): 用于下载、解压与导出流程。
 
 ---
 

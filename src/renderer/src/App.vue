@@ -592,13 +592,18 @@ async function downloadGameWithFallback(urls: string[], destDir: string, filenam
 
     for (const url of urls) {
         try {
-            console.log(`Download completed from ${url}`);
+            console.log(`Starting download from ${url}`);
             await api.downloadGame(url, destDir, filename, gameId);
+            console.log(`Download completed from ${url}`);
 
             return;
         } catch (err) {
             lastError = err;
             console.warn(`Download failed from ${url}:`, err);
+            const message = String(err ?? '');
+            if (!message.startsWith('download ')) {
+                throw err;
+            }
         }
     }
 
@@ -1044,7 +1049,14 @@ async function handleAction() {
 
             game_temp.type = 'local';
             game_temp.playable = true;
-            game_temp.execution_path = path.normalize(game_temp.version == "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : path.join(settings.value.downloadPath, game_temp.id, "game.exe"));
+            const gameDir = game_temp.version === "0.0.2"
+                ? path.join(CYF_PATH.value, "Mods", game_temp.name.en.replace(/[\/\?<>\\:\*\|":\x00-\x1f]/g, " "))
+                : path.join(settings.value.downloadPath, game_temp.id);
+            game_temp.execution_path = path.normalize(
+                game_temp.version === "0.0.2"
+                    ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe")
+                    : await api.findExecutable(gameDir)
+            );
             const existingIndex = userGames.value.findIndex(g => g.id === game_temp.id);
             if (existingIndex !== -1) {
                 userGames.value.splice(existingIndex, 1);
@@ -1334,10 +1346,14 @@ async function performAupImport() {
         // 并行移动文件夹
         const moveTasks = gamesToAdd.map(async (g) => {
             const destDir = g.version === "0.0.2" ? path.join(CYF_PATH.value, "Mods", g.name.en) : path.join(settings.value.downloadPath, g.id);
-            const newExecPath = path.normalize(g.version === "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : path.join(destDir, path.basename(g.execution_path.replace(/\\/g, '/'))));
 
             await api.moveFolder(path.join(tmpAupDir.value, g.id), destDir);
 
+            const newExecPath = path.normalize(
+                g.version === "0.0.2"
+                    ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe")
+                    : await api.findExecutable(destDir)
+            );
             const newG = { ...g, execution_path: newExecPath };
             if (userGamesMap.has(g.id)) {
                 userGames.value[userGamesMap.get(g.id) as number] = newG;
