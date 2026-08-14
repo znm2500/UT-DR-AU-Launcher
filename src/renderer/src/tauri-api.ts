@@ -27,10 +27,6 @@ const api = {
         return invoke<string>('launch_game', { filePath: path })
     },
 
-    async findGameExecutable(rootPath: string): Promise<string> {
-        return invoke<string>('find_game_executable', { rootPath })
-    },
-
     async downloadGame(url: string, destDir: string, filename: string, gameId: string): Promise<boolean> {
         return invoke<boolean>('download_and_extract', {
             downloadUrl: url,

@@ -10,8 +10,6 @@ import cancelWav from './assets/sfx/cancel.wav'
 import switchWav from './assets/sfx/switch.wav'
 import saveWav from './assets/sfx/save.wav'
 import SparkMD5 from 'spark-md5';
-import OpenCCCn2T from 'opencc-js/cn2t';
-import OpenCCT2Cn from 'opencc-js/t2cn';
 const availableLanguages = [
     { code: 'en', label: 'English' },
     { code: 'zh_Hans', label: '中文（简体）' },
@@ -347,7 +345,7 @@ const searchInput = ref('');
 const GITHUB_GAMES = ref<any[]>([]);
 const CYF_PATH = ref('');
 const userGames = ref<any[]>([]);
-const currentVersion = '1.5.0';
+const currentVersion = '1.3.0';
 const latestVersion = ref('');
 const updateLog = ref<Record<string, string>>({});
 const settings = ref({
@@ -357,7 +355,7 @@ const settings = ref({
     musicDirectory: ''
 });
 const showAnnouncement = ref(false);
-const announcementData = ref<LocalizedTextMap>({ en: '', zh: '', zh_Hant: '' });
+const announcementData = ref({ en: '', zh_Hans: '', zh_Hant: '' });
 const showUpdateModal = ref(false);
 const showExeImportModal = ref(false);
 const showDownloadModal = ref(false);
@@ -448,139 +446,6 @@ const appBackgroundStyle = computed(() => {
     return {};
 });
 
-type LocalizedTextMap = Record<string, string>;
-const simplifiedToTraditional = OpenCCCn2T.Converter({ from: 'cn', to: 'tw' });
-const traditionalToSimplified = OpenCCT2Cn.Converter({ from: 'tw', to: 'cn' });
-
-
-function convertSimplifiedToTraditional(text: string): string {
-    return simplifiedToTraditional(text);
-}
-
-function convertTraditionalToSimplified(text: string): string {
-    return traditionalToSimplified(text);
-}
-
-function createLocalTextMap(value: string, locale: string): LocalizedTextMap {
-    if (locale === 'zh_Hant') {
-        return {
-            en: value,
-            zh_Hans: value ? convertTraditionalToSimplified(value) : '',
-            zh_Hant: value
-        };
-    }
-
-    if (locale === 'zh_Hans') {
-        return {
-            en: value,
-            zh_Hans: value,
-            zh_Hant: value ? convertSimplifiedToTraditional(value) : ''
-        };
-    }
-
-    return {
-        en: value,
-        zh_Hans: value,
-        zh_Hant: value ? convertSimplifiedToTraditional(value) : ''
-    };
-}
-
-function fillMissingLocalChineseText(source: any): LocalizedTextMap {
-    const localized = { ...(source || {}) } as LocalizedTextMap;
-
-    if (localized.zh && !localized.zh_Hans) {
-        localized.zh_Hans = localized.zh;
-    }
-
-    if (localized.zh_Hant && !localized.zh_Hans) {
-        localized.zh_Hans = convertTraditionalToSimplified(localized.zh_Hant);
-    }
-
-    if (localized.zh_Hans && !localized.zh_Hant) {
-        localized.zh_Hant = convertSimplifiedToTraditional(localized.zh_Hans);
-    }
-
-    return localized;
-}
-
-function normalizeLocalGameTextFields(game: any): any {
-    return {
-        ...game,
-        name: fillMissingLocalChineseText(game.name),
-        author: fillMissingLocalChineseText(game.author),
-        desc: fillMissingLocalChineseText(game.desc)
-    };
-}
-
-function getRawLocalizedText(source: any, locale: string): string {
-    if (!source) return '';
-    if (typeof source === 'string') return source;
-
-    if (locale === 'en') {
-        return source.en || source.zh || source.zh_Hans || source.zh_Hant || '';
-    }
-
-    if (locale === 'zh_Hant') {
-        return source.zh_Hant || (source.zh ? convertSimplifiedToTraditional(source.zh) : '') ||
-            (source.zh_Hans ? convertSimplifiedToTraditional(source.zh_Hans) : '') || source.en || '';
-    }
-
-    return source.zh_Hans || source.zh || source.zh_Hant || source.en || '';
-}
-
-function localizedText(source: any, fallback = ''): string {
-    return getRawLocalizedText(source, currentLang.value) || fallback;
-}
-
-function withRemoteZhFallback(source: any): any {
-    if (!source || typeof source !== 'object' || Array.isArray(source)) return source;
-
-    const localized = { ...source } as LocalizedTextMap;
-    if (!localized.zh_Hant) {
-        if (localized.zh) {
-            localized.zh_Hant = convertSimplifiedToTraditional(localized.zh);
-        }
-    }
-    return localized;
-}
-
-function normalizeRemoteLocalizedFields(data: any): any {
-    if (!data) return data;
-
-    const normalized = { ...data };
-    normalized.update_log = withRemoteZhFallback(data.update_log || {});
-    normalized.announcement = withRemoteZhFallback(data.announcement || {});
-    normalized.games = Array.isArray(data.games)
-        ? data.games.map((game: any) => ({
-            ...game,
-            name: withRemoteZhFallback(game.name),
-            author: withRemoteZhFallback(game.author),
-            desc: withRemoteZhFallback(game.desc)
-        }))
-        : data.games;
-
-    return normalized;
-}
-
-function stripRemoteGeneratedLocaleFields(source: any): any {
-    if (!source || typeof source !== 'object' || Array.isArray(source)) return source;
-
-    const cleaned = { ...source } as LocalizedTextMap;
-    if (cleaned.zh && cleaned.zh_Hant === convertSimplifiedToTraditional(cleaned.zh)) {
-        delete cleaned.zh_Hant;
-    }
-    return cleaned;
-}
-
-function serializeRemoteGameForLocalStore(game: any): any {
-    return {
-        ...game,
-        name: stripRemoteGeneratedLocaleFields(game.name),
-        author: stripRemoteGeneratedLocaleFields(game.author),
-        desc: stripRemoteGeneratedLocaleFields(game.desc)
-    };
-}
-
 function getRemoteCoverCandidates(gameId: string): string[] {
     const gitcodeApiUrl = remoteCoverDataMap.value[gameId] || '';
     const githubCfg = remoteGithubConfig.value;
@@ -591,11 +456,9 @@ function getRemoteCoverCandidates(gameId: string): string[] {
         ? `https://raw.githubusercontent.com/${githubCfg.githubDataOwner}/${githubCfg.githubDataRepo}/${githubCfg.githubDataBranch}/${gameId}.webp`
         : '';
 
-    const fallbackUrls = [jsdelivrUrl, githubRawUrl].filter(Boolean);
-
-    return isChinaIP.value && gitcodeApiUrl
-        ? [gitcodeApiUrl, ...fallbackUrls]
-        : fallbackUrls;
+    return gitcodeApiUrl
+        ? [gitcodeApiUrl, jsdelivrUrl, githubRawUrl].filter(Boolean)
+        : [jsdelivrUrl, githubRawUrl].filter(Boolean);
 }
 
 function base64ToUtf8String(b64: string): string {
@@ -1181,13 +1044,13 @@ async function handleAction() {
 
             game_temp.type = 'local';
             game_temp.playable = true;
-            game_temp.execution_path = path.normalize(game_temp.version == "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : await api.findGameExecutable(path.join(settings.value.downloadPath, game_temp.id)));
+            game_temp.execution_path = path.normalize(game_temp.version == "0.0.2" ? path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe") : path.join(settings.value.downloadPath, game_temp.id, "game.exe"));
             const existingIndex = userGames.value.findIndex(g => g.id === game_temp.id);
             if (existingIndex !== -1) {
                 userGames.value.splice(existingIndex, 1);
             }
             // 使用深拷贝断开引用
-            userGames.value.unshift(JSON.parse(JSON.stringify(serializeRemoteGameForLocalStore(game_temp))));
+            userGames.value.unshift(JSON.parse(JSON.stringify(game_temp)));
 
             downloadIdSet.delete(game_temp.id);
             delete downloadProgress[game_temp.id];
@@ -1304,12 +1167,20 @@ function handleExeImportImageSelect(e: Event) {
 async function confirmExeImport() {
     if (!exeImportForm.name || !exeImportForm.path) return;
 
+    const newGameNames: { [key: string]: string } = {};
+    for (const lang of Object.keys(I18N)) {
+        newGameNames[lang] = exeImportForm.name;
+    }
     const newGame = {
         id: `local${crypto.randomUUID()}`,
-        name: createLocalTextMap(exeImportForm.name, currentLang.value),
+        name: newGameNames,
         type: 'local',
         playable: true,
-        author: createLocalTextMap(exeImportForm.author, currentLang.value),
+        author: {
+            en: exeImportForm.author,
+            zh_Hans: exeImportForm.author,
+            zh_Hant: exeImportForm.author
+        },
         engine: exeImportForm.engine,
         execution_path: exeImportForm.path,
         img: defaultCover
@@ -1341,10 +1212,14 @@ async function confirmCyfImport() {
 
     const newGame = {
         id: `local${crypto.randomUUID()}`,
-        name: createLocalTextMap(exeImportForm.name, currentLang.value),
+        name: { en: exeImportForm.name, zh_Hans: exeImportForm.name, zh_Hant: exeImportForm.name },
         type: 'local',
         playable: true,
-        author: createLocalTextMap(exeImportForm.author, currentLang.value),
+        author: {
+            en: exeImportForm.author,
+            zh_Hans: exeImportForm.author,
+            zh_Hant: exeImportForm.author
+        },
         engine: exeImportForm.engine,
         execution_path: path.normalize(path.join(CYF_PATH.value, "Create Your Frisk 0.6.6 LTS 4.exe")),
         img: defaultCover,
@@ -1463,7 +1338,7 @@ async function performAupImport() {
 
             await api.moveFolder(path.join(tmpAupDir.value, g.id), destDir);
 
-            const newG = normalizeLocalGameTextFields({ ...g, execution_path: newExecPath });
+            const newG = { ...g, execution_path: newExecPath };
             if (userGamesMap.has(g.id)) {
                 userGames.value[userGamesMap.get(g.id) as number] = newG;
             } else {
@@ -1602,11 +1477,11 @@ function openSettings() {
     settingsForm.musicDirectory = settings.value.musicDirectory;
     settingsForm.lang = settings.value.lang;
     if (activeGame.value) {
-        settingsForm.name = localizedText(activeGame.value.name);
+        settingsForm.name = activeGame.value.name[currentLang.value] || activeGame.value.name['en'] || '';
         settingsForm.gamePath = activeGame.value.execution_path;
         settingsForm.imageName = activeGame.value.img ? lang.value.settings_image_current : lang.value.settings_image_not_chosen;
         if (activeGame.value.id.includes('local')) {
-            settingsForm.author = localizedText(activeGame.value.author);
+            settingsForm.author = activeGame.value.author[currentLang.value] || activeGame.value.author['en'] || '';
             settingsForm.engine = activeGame.value.engine || '';
         }
     }
@@ -1640,7 +1515,6 @@ async function saveSettings() {
                 // 名字修改
                 if (activeGame.value.name[currentLang.value] !== settingsForm.name) {
                     activeGame.value.name[currentLang.value] = settingsForm.name;
-                    activeGame.value.name = fillMissingLocalChineseText(activeGame.value.name);
                     gameUpdated = true;
                 }
                 // 路径修改
@@ -1661,7 +1535,6 @@ async function saveSettings() {
                     // 作者修改
                     if (activeGame.value.author[currentLang.value] !== settingsForm.author) {
                         activeGame.value.author[currentLang.value] = settingsForm.author;
-                        activeGame.value.author = fillMissingLocalChineseText(activeGame.value.author);
                         gameUpdated = true;
                     }
                     // 引擎修改
@@ -1873,7 +1746,7 @@ onMounted(async () => {
         }).catch((err) => { console.error(err) });
         const pCyfpath = api.getStoreValue('cyfpath', '');
         // 2. 等待所有本地数据返回 (这是最快的 IO 方式)
-        const pIgnoredVersion = api.getStoreValue('ignoredVersion', '1.5.0');
+        const pIgnoredVersion = api.getStoreValue('ignoredVersion', '1.3.0');
 
         const [games, savedSettings, savedIgnoredVersion, savedCyfPath] = await Promise.all([
             pGames, pSettings, pIgnoredVersion, pCyfpath
@@ -1919,8 +1792,7 @@ onMounted(async () => {
     // ============================================================
     const cachedConfig = loadRemoteConfigCache();
     if (cachedConfig) {
-        const normalizedCachedConfig = normalizeRemoteLocalizedFields(cachedConfig);
-        GITHUB_GAMES.value = normalizedCachedConfig.games;
+        GITHUB_GAMES.value = cachedConfig.games;
     }
 
     (async () => {
@@ -1931,12 +1803,10 @@ onMounted(async () => {
             isChinaIP.value = ipCheckResult;
             console.log('IP check result:', ipCheckResult);
             let data: any | null = null;
-            if (isChinaIP.value) {
-                try {
-                    data = await fetchConfigFromGitcodeApi();
-                } catch (err) {
-                    console.warn('Failed to load GitCode config via API:', err);
-                }
+            try {
+                data = await fetchConfigFromGitcodeApi();
+            } catch (err) {
+                console.warn('Failed to load GitCode config via API:', err);
             }
 
             if (!data) {
@@ -1952,26 +1822,25 @@ onMounted(async () => {
                 data = await fetchConfigWithFallback(configCandidates);
             }
 
-            const normalizedData = normalizeRemoteLocalizedFields(data);
-            GITHUB_GAMES.value = normalizedData.games;
+            GITHUB_GAMES.value = data.games;
             saveRemoteConfigCache(data);
 
+            await refreshGithubSnapshot();
             if (isChinaIP.value) {
-                await refreshGithubSnapshot();
-                await hydrateRemoteCoverCache(normalizedData.games || []);
+                await hydrateRemoteCoverCache(data.games || []);
             }
-            if (normalizedData.newest_version !== currentVersion && normalizedData.newest_version !== ignoredVersion) {
-                latestVersion.value = normalizedData.newest_version;
-                updateLog.value = normalizedData.update_log || {};
+            if (data.newest_version !== currentVersion && data.newest_version !== ignoredVersion) {
+                latestVersion.value = data.newest_version;
+                updateLog.value = data.update_log || {};
                 showUpdateModal.value = true;
             }
             const lastReadIndex = await api.getStoreValue('last_announcement_index', '');
 
             // 如果服务器公告索引不为 0 且 与本地保存的不一致，则显示弹窗
-            if (normalizedData.announcement?.en !== lastReadIndex && normalizedData.announcement?.en) {
-                announcementData.value = normalizedData.announcement || { en: '', zh: '', zh_Hant: '' };
+            if (data.announcement?.en !== lastReadIndex && data.announcement?.en) {
+                announcementData.value = data.announcement || { en: '', zh_Hans: '', zh_Hant: '' };
                 showAnnouncement.value = true;
-                announcementIndex = normalizedData.announcement?.en;
+                announcementIndex = data.announcement?.en;
             }
 
         } catch (error: any) {
@@ -2023,9 +1892,9 @@ onUnmounted(() => {
                 <div class="card-left">
                     <img :src="soulIcon" class="soul-icon" draggable="false" />
                     <div class="info-box">
-                        <div class="name">{{ localizedText(game.name) }}</div>
+                        <div class="name">{{ game.name[currentLang] || game.name['en'] }}</div>
                         <div class="game-meta" style="font-size: 0.9rem; color: #bbb; margin-bottom: 8px;">
-                            <span v-if="game.author">by {{ localizedText(game.author) }}</span>
+                            <span v-if="game.author">by {{ game.author[currentLang] || game.author['en'] }}</span>
                             <span v-if="game.engine" style="margin-left: 10px; color: #888;">[{{ game.engine }}]</span>
                         </div>
                         <div :key="force_render_key" :class="['status',
@@ -2135,7 +2004,7 @@ onUnmounted(() => {
                     <div class="confirm-body"
                         style="margin: 20px 0; overflow-y: auto; text-align: left; line-height: 1.6; font-size: 1.1rem; white-space: pre-wrap;">
                         <div class="changelog-container">
-                            {{ localizedText(announcementData) }}
+                            {{ announcementData[currentLang] || announcementData['en'] }}
                         </div>
                     </div>
 
@@ -2158,7 +2027,7 @@ onUnmounted(() => {
                         {{ lang.update_msg }} <span style="color: #00FF00;">{{ latestVersion }}</span>
 
                         <div class="changelog-container">
-                            <pre class="changelog-text">{{ localizedText(updateLog) }}</pre>
+                            <pre class="changelog-text">{{ updateLog[currentLang] || updateLog['en'] }}</pre>
                         </div>
                     </div>
                     <div class="confirm-actions" style="flex-direction: column; gap: 15px;">
@@ -2176,7 +2045,7 @@ onUnmounted(() => {
             <div v-if="showImportTypeModal" id="import-type-overlay">
                 <div class="confirm-card" style="width: 480px;">
                     <div class="settings-title" style="text-align: center; margin-bottom: 25px;">[ {{ lang.import_title
-                        }} ]
+                    }} ]
                     </div>
                     <div class="confirm-actions"
                         style="flex-direction: column; align-items: flex-start; gap: 20px; padding: 0 20px;">
@@ -2184,10 +2053,10 @@ onUnmounted(() => {
                             lang.import_method_exe }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importFromAup">{{
                             lang.import_method_aup
-                            }}</div>
+                        }}</div>
                         <div class="btn enabled" style="font-size: 1.5rem;" @click="importCyfMod">{{
                             lang.import_method_cyf
-                            }}</div>
+                        }}</div>
                         <div style="height: 10px; width: 100%; border-bottom: 2px solid #333;"></div>
                         <div class="btn" style="align-self: center;"
                             @click="showImportTypeModal = false; playSfx('cancel');">{{
@@ -2374,7 +2243,7 @@ onUnmounted(() => {
                                 :class="['export-item', { selected: selectedAupIds.has(g.id) }]"
                                 @click="playSfx('switch'); selectedAupIds.has(g.id) ? selectedAupIds.delete(g.id) : selectedAupIds.add(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedAupIds.has(g.id) ? '[x]' : '[ ]' }}</span>
-                                {{ localizedText(g.name) }}
+                                {{ g.name[currentLang] || g.name['en'] }}
                             </div>
                         </div>
                     </div>
@@ -2396,7 +2265,7 @@ onUnmounted(() => {
             <div v-if="showConfirmDelete" id="confirm-overlay">
                 <div class="confirm-card">
                     <div class="confirm-body">{{ lang.confirm_del }} <span id="confirm-game-name">{{
-                        activeGame ? localizedText(activeGame.name) : '' }}</span>?</div>
+                        activeGame ? activeGame.name[currentLang] || activeGame.name['en'] : '' }}</span>?</div>
                     <div class="confirm-actions">
                         <div class="btn enabled" @click="performDelete">{{ lang.confirm_yes }}</div>
                         <div class="btn" @click="cancelDelete">{{ lang.confirm_no }}</div>
@@ -2423,8 +2292,8 @@ onUnmounted(() => {
                                 :class="['export-item', { selected: selectedExportIds.has(g.id) }]"
                                 @click="toggleExportSelection(g.id)">
                                 <span style="margin-right: 10px;">{{ selectedExportIds.has(g.id) ? '[x]' : '[ ]'
-                                    }}</span>
-                                {{ localizedText(g.name) }}
+                                }}</span>
+                                {{ g.name[currentLang] || g.name['en'] }}
                             </div>
                         </div>
                     </div>
@@ -2457,10 +2326,10 @@ onUnmounted(() => {
                         <div style="display:flex;gap:8px;align-items:center;">
                             <label class="btn" for="setting-bg-image-input" id="setting-choose-bg-image">{{
                                 lang.settings_choose_image
-                                }}</label>
+                            }}</label>
                             <div style="color:#ddd; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis;">{{
                                 settingsForm.bgImageName
-                                }}</div>
+                            }}</div>
                         </div>
                         <input type="file" id="setting-bg-image-input" @change="handleBgFileSelect"
                             accept=".jpg,.jpeg,.png,.webp,.gif" style="display:none" />

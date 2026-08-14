@@ -31,7 +31,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["resources/GeoLite2-Country.mmdb"],
+    "resources": [
+      "resources/GeoLite2-Country.mmdb",
+      "resources/7zip/7za.exe",
+      "resources/7zip/License.txt"
+    ],
     "icon": ["icons/icon.ico", "icons/icon.png"]
   }
 }

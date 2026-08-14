@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -83,18 +82,13 @@ struct LocalConfig {
     gitcode_config_path: String,
     gitcode_token: String,
     wecom_webhook_url: String,
+    github_data_owner: String,
+    github_data_repo: String,
+    github_data_branch: String,
 }
 
 static LOCAL_CONFIG_CACHE: LazyLock<Mutex<Option<LocalConfig>>> =
     LazyLock::new(|| Mutex::new(None));
-
-const DEFAULT_GITCODE_OWNER: &str = "znm1145";
-const DEFAULT_GITCODE_REPO: &str = "AU-Launcher-Repo";
-const DEFAULT_GITCODE_BRANCH: &str = "data";
-const DEFAULT_GITCODE_CONFIG_PATH: &str = "config.json";
-const DEFAULT_GITHUB_DATA_OWNER: &str = "znm2500";
-const DEFAULT_GITHUB_DATA_REPO: &str = "AU-Launcher-Repo";
-const DEFAULT_GITHUB_DATA_BRANCH: &str = "data";
 
 #[derive(Debug, Deserialize)]
 struct SubmitGameApplicationPayload {
@@ -181,74 +175,6 @@ fn required_property(
     Err(format!("Missing required property: {}", label))
 }
 
-fn optional_property(values: &HashMap<String, String>, keys: &[&str], fallback: &str) -> String {
-    for key in keys {
-        if let Some(value) = values.get(*key) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
-        }
-    }
-
-    fallback.to_string()
-}
-
-fn load_public_github_config() -> PublicGithubConfig {
-    for candidate in local_properties_candidates() {
-        if let Ok(contents) = fs::read_to_string(&candidate) {
-            let values = parse_local_properties(&contents);
-            return PublicGithubConfig {
-                owner: optional_property(
-                    &values,
-                    &["gitcode.owner", "gitcode_owner"],
-                    DEFAULT_GITCODE_OWNER,
-                ),
-                repo: optional_property(
-                    &values,
-                    &["gitcode.repo", "gitcode_repo"],
-                    DEFAULT_GITCODE_REPO,
-                ),
-                branch: optional_property(
-                    &values,
-                    &["gitcode.branch", "gitcode_branch"],
-                    DEFAULT_GITCODE_BRANCH,
-                ),
-                config_path: optional_property(
-                    &values,
-                    &["gitcode.config_path", "gitcode_config_path"],
-                    DEFAULT_GITCODE_CONFIG_PATH,
-                ),
-                github_data_owner: optional_property(
-                    &values,
-                    &["github.data_owner", "github_data_owner"],
-                    DEFAULT_GITHUB_DATA_OWNER,
-                ),
-                github_data_repo: optional_property(
-                    &values,
-                    &["github.data_repo", "github_data_repo"],
-                    DEFAULT_GITHUB_DATA_REPO,
-                ),
-                github_data_branch: optional_property(
-                    &values,
-                    &["github.data_branch", "github_data_branch"],
-                    DEFAULT_GITHUB_DATA_BRANCH,
-                ),
-            };
-        }
-    }
-
-    PublicGithubConfig {
-        owner: DEFAULT_GITCODE_OWNER.to_string(),
-        repo: DEFAULT_GITCODE_REPO.to_string(),
-        branch: DEFAULT_GITCODE_BRANCH.to_string(),
-        config_path: DEFAULT_GITCODE_CONFIG_PATH.to_string(),
-        github_data_owner: DEFAULT_GITHUB_DATA_OWNER.to_string(),
-        github_data_repo: DEFAULT_GITHUB_DATA_REPO.to_string(),
-        github_data_branch: DEFAULT_GITHUB_DATA_BRANCH.to_string(),
-    }
-}
-
 fn load_local_config() -> Result<LocalConfig, String> {
     if let Some(cached) = LOCAL_CONFIG_CACHE
         .lock()
@@ -297,6 +223,21 @@ fn load_local_config() -> Result<LocalConfig, String> {
                             "wechat.webhook_url",
                         ],
                         "wecom.webhook_url",
+                    )?,
+                    github_data_owner: required_property(
+                        &values,
+                        &["github.data_owner", "github_data_owner"],
+                        "github.data_owner",
+                    )?,
+                    github_data_repo: required_property(
+                        &values,
+                        &["github.data_repo", "github_data_repo"],
+                        "github.data_repo",
+                    )?,
+                    github_data_branch: required_property(
+                        &values,
+                        &["github.data_branch", "github_data_branch"],
+                        "github.data_branch",
                     )?,
                 };
 
@@ -573,50 +514,14 @@ fn normalized_game_key(file_path: &str) -> String {
     }
 }
 
-fn resolve_game_executable_path(path: &Path) -> Result<PathBuf, String> {
-    if path.is_file() {
-        return Ok(path.to_path_buf());
-    }
-    if !path.is_dir() {
-        return Err(format!("Path not found: {}", path.display()));
-    }
-
-    let mut queue = VecDeque::new();
-    queue.push_back(path.to_path_buf());
-
-    while let Some(dir) = queue.pop_front() {
-        let entries = fs::read_dir(&dir).map_err(|e| e.to_string())?;
-        for entry in entries {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let file_type = entry.file_type().map_err(|e| e.to_string())?;
-            let entry_path = entry.path();
-
-            if file_type.is_file() {
-                if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
-                    if name.eq_ignore_ascii_case("game.exe") {
-                        return Ok(entry_path);
-                    }
-                }
-            } else if file_type.is_dir() {
-                queue.push_back(entry_path); // 子目录放入队列尾部，实现按层扩展
-            }
-        }
-    }
-
-    Err(format!("在所有层级中未找到 game.exe: {}", path.display()))
-}
-
-#[tauri::command]
-fn find_game_executable(root_path: String) -> Result<String, String> {
-    resolve_game_executable_path(Path::new(&root_path))
-        .map(|path| path.to_string_lossy().to_string())
-}
-
 #[tauri::command]
 async fn launch_game(file_path: String) -> Result<String, String> {
-    let target = resolve_game_executable_path(Path::new(&file_path))?;
+    let target = PathBuf::from(&file_path);
+    if !target.exists() {
+        return Err(format!("File not found: {}", file_path));
+    }
 
-    let game_key = normalized_game_key(&target.to_string_lossy());
+    let game_key = normalized_game_key(&file_path);
     {
         let mut running_games = RUNNING_GAMES.lock().map_err(|err| err.to_string())?;
         if running_games.contains(&game_key) {
@@ -628,7 +533,7 @@ async fn launch_game(file_path: String) -> Result<String, String> {
     let mut child = {
         #[cfg(target_os = "windows")]
         {
-            Command::new(&target)
+            Command::new(&file_path)
                 .spawn()
                 .map_err(|err| err.to_string())?
         }
@@ -636,7 +541,7 @@ async fn launch_game(file_path: String) -> Result<String, String> {
         #[cfg(not(target_os = "windows"))]
         {
             Command::new("wine")
-                .arg(&target)
+                .arg(&file_path)
                 .spawn()
                 .map_err(|err| err.to_string())?
         }
@@ -958,8 +863,17 @@ async fn export_game(
 }
 
 #[tauri::command]
-fn get_github_config_public() -> PublicGithubConfig {
-    load_public_github_config()
+fn get_github_config_public() -> Result<PublicGithubConfig, String> {
+    let config = load_local_config()?;
+    Ok(PublicGithubConfig {
+        owner: config.gitcode_owner,
+        repo: config.gitcode_repo,
+        branch: config.gitcode_branch,
+        config_path: config.gitcode_config_path,
+        github_data_owner: config.github_data_owner,
+        github_data_repo: config.github_data_repo,
+        github_data_branch: config.github_data_branch,
+    })
 }
 
 #[tauri::command]
@@ -1222,7 +1136,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            find_game_executable,
             launch_game,
             get_local_path,
             folder_is_existed,
