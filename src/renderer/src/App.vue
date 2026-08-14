@@ -442,6 +442,35 @@ function forceRender() {
     force_render_key.value++;
 }
 
+function isDefaultCover(value: unknown): boolean {
+    if (typeof value !== 'string' || !value.trim()) {
+        return true;
+    }
+
+    if (value === defaultCover) {
+        return true;
+    }
+
+    try {
+        const pathname = new URL(value, window.location.href).pathname;
+        return /\/default_cover(?:-[^/]+)?\.webp$/i.test(pathname);
+    } catch {
+        return /(?:^|[\\/])default_cover(?:-[^/]+)?\.webp$/i.test(value);
+    }
+}
+
+function normalizeStoredGame(game: any): any {
+    if (!isPlainObject(game)) {
+        return game;
+    }
+
+    const normalized = { ...game };
+    if (isDefaultCover(normalized.img)) {
+        normalized.img = defaultCover;
+    }
+    return normalized;
+}
+
 const appBackgroundStyle = computed(() => {
     if (settings.value.backgroundImage) {
         return { backgroundImage: `url(${settings.value.backgroundImage})` };
@@ -699,7 +728,7 @@ const fullList = computed(() => {
                     g.img = remoteCoverDataMap.value[g.id];
                 } else if (isCurrentUrlInCandidates) {
                     g._imgTryIndex = Math.max(currentTryIndex, candidates.indexOf(g.img));
-                } else if (!hasCurrentUrl || g.img === defaultCover) {
+                } else if (!hasCurrentUrl || isDefaultCover(g.img)) {
                     g._imgTryIndex = 0;
                     g.img = candidates[0] || defaultCover;
                 }
@@ -1550,6 +1579,7 @@ function browseGamePath() {
 
 function openSettings() {
     playSfx('confirm');
+    settingsForm.image = null;
     settingsForm.downloadPath = settings.value.downloadPath;
     settingsForm.musicDirectory = settings.value.musicDirectory;
     settingsForm.lang = settings.value.lang;
@@ -1576,6 +1606,7 @@ async function saveSettings() {
     try {
         // 准备异步任务列表
         const tasks: Promise<any>[] = [];
+        let settingsUpdated = false;
 
         // 处理背景图片
         if (settingsForm.bgImage) {
@@ -1583,6 +1614,7 @@ async function saveSettings() {
                 settings.value.backgroundImage = data;
             });
             tasks.push(bgTask);
+            settingsUpdated = true;
         }
 
         // 处理游戏设置
@@ -1623,7 +1655,6 @@ async function saveSettings() {
             }
 
         }
-        let settingsUpdated = false;
         // 更新内存中的设置状态
         if (settings.value.downloadPath !== settingsForm.downloadPath) {
             settings.value.downloadPath = settingsForm.downloadPath;
@@ -1828,8 +1859,23 @@ onMounted(async () => {
         const [games, savedSettings, savedIgnoredVersion, savedCyfPath] = await Promise.all([
             pGames, pSettings, pIgnoredVersion, pCyfpath
         ]);
-        userGames.value = games;
-        settings.value = savedSettings;
+        const defaultSettings = {
+            lang: 'en',
+            downloadPath: await api.getlocalpath('downloads'),
+            backgroundImage: '',
+            musicDirectory: await api.getlocalpath('music')
+        };
+        settings.value = {
+            ...defaultSettings,
+            ...(isPlainObject(savedSettings) ? savedSettings : {})
+        };
+        if (!settings.value.downloadPath) {
+            settings.value.downloadPath = defaultSettings.downloadPath;
+        }
+        if (!settings.value.musicDirectory) {
+            settings.value.musicDirectory = defaultSettings.musicDirectory;
+        }
+        userGames.value = Array.isArray(games) ? games.map(normalizeStoredGame) : [];
         CYF_PATH.value = savedCyfPath;
         if (!await api.isFolderExisted(CYF_PATH.value)) {
             CYF_PATH.value = '';

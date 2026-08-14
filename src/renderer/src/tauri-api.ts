@@ -5,10 +5,17 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 import { Store } from '@tauri-apps/plugin-store'
 
 const storePromise = Store.load('settings.kola')
+// An old Electron store is optional. A missing or inaccessible legacy path
+// must never prevent the new Tauri store from loading.
 const legacyStorePromise = (async () => {
-    const appDataPath = await appDataDir()
-    const legacyConfigPath = await join(appDataPath, '..', 'au-launcher', 'config.json')
-    return Store.load(legacyConfigPath)
+    try {
+        const appDataPath = await appDataDir()
+        const legacyConfigPath = await join(appDataPath, '..', 'au-launcher', 'config.json')
+        return await Store.load(legacyConfigPath)
+    } catch (error) {
+        console.warn('Legacy config migration skipped:', error)
+        return null
+    }
 })()
 let unlistenDownload: UnlistenFn | null = null
 let unlistenZip: UnlistenFn | null = null
@@ -66,11 +73,13 @@ const api = {
 
         // 兼容 Electron 旧版配置，避免迁移后丢失历史数据。
         const legacyStore = await legacyStorePromise
-        const legacyFound = await legacyStore.get(key)
-        if (legacyFound !== undefined) {
-            await store.set(key, legacyFound)
-            await store.save()
-            return legacyFound
+        if (legacyStore) {
+            const legacyFound = await legacyStore.get(key)
+            if (legacyFound !== undefined) {
+                await store.set(key, legacyFound)
+                await store.save()
+                return legacyFound
+            }
         }
 
         return value

@@ -130,9 +130,20 @@ fn parse_local_properties(contents: &str) -> HashMap<String, String> {
     values
 }
 
-fn local_properties_candidates() -> Vec<PathBuf> {
+fn local_properties_candidates(app: Option<&AppHandle>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
+
+    if let Some(app) = app {
+        if let Ok(resource_path) = app
+            .path()
+            .resolve("local.properties", BaseDirectory::Resource)
+        {
+            if seen.insert(resource_path.clone()) {
+                candidates.push(resource_path);
+            }
+        }
+    }
 
     let mut push_ancestors = |start: Option<PathBuf>| {
         if let Some(path) = start {
@@ -174,7 +185,7 @@ fn required_property(
     Err(format!("Missing required property: {}", label))
 }
 
-fn load_local_config() -> Result<LocalConfig, String> {
+fn load_local_config(app: Option<&AppHandle>) -> Result<LocalConfig, String> {
     if let Some(cached) = LOCAL_CONFIG_CACHE
         .lock()
         .map_err(|err| err.to_string())?
@@ -184,7 +195,7 @@ fn load_local_config() -> Result<LocalConfig, String> {
     }
 
     let mut last_error = None;
-    for candidate in local_properties_candidates() {
+    for candidate in local_properties_candidates(app) {
         match fs::read_to_string(&candidate) {
             Ok(contents) => {
                 let values = parse_local_properties(&contents);
@@ -562,8 +573,10 @@ fn sevenz_directory_with_progress(
     Ok(())
 }
 
-fn get_gitcode_config() -> Result<(String, String, String, String, String), String> {
-    let config = load_local_config()?;
+fn get_gitcode_config(
+    app: &AppHandle,
+) -> Result<(String, String, String, String, String), String> {
+    let config = load_local_config(Some(app))?;
     Ok((
         config.gitcode_owner,
         config.gitcode_repo,
@@ -574,8 +587,11 @@ fn get_gitcode_config() -> Result<(String, String, String, String, String), Stri
 }
 
 #[tauri::command]
-async fn get_gitcode_file_content(path_in_repo: String) -> Result<GitcodeFileContent, String> {
-    let (owner, repo, branch, _, token) = get_gitcode_config()?;
+async fn get_gitcode_file_content(
+    app: AppHandle,
+    path_in_repo: String,
+) -> Result<GitcodeFileContent, String> {
+    let (owner, repo, branch, _, token) = get_gitcode_config(&app)?;
     if token.is_empty() {
         return Err("Missing GitCode token".to_string());
     }
@@ -1010,8 +1026,8 @@ async fn export_game(
 }
 
 #[tauri::command]
-fn get_github_config_public() -> Result<PublicGithubConfig, String> {
-    let config = load_local_config()?;
+fn get_github_config_public(app: AppHandle) -> Result<PublicGithubConfig, String> {
+    let config = load_local_config(Some(&app))?;
     Ok(PublicGithubConfig {
         owner: config.gitcode_owner,
         repo: config.gitcode_repo,
@@ -1025,11 +1041,12 @@ fn get_github_config_public() -> Result<PublicGithubConfig, String> {
 
 #[tauri::command]
 async fn increment_remote_highscore(
+    app: AppHandle,
     game_id: String,
     snapshot: Option<GithubSnapshot>,
 ) -> HighscoreResult {
     let result: Result<HighscoreResult, String> = async {
-        let (owner, repo, branch, config_path, token) = get_gitcode_config()?;
+        let (owner, repo, branch, config_path, token) = get_gitcode_config(&app)?;
         if token.is_empty() {
             return Err("Missing GitCode token".to_string());
         }
@@ -1149,7 +1166,7 @@ async fn increment_remote_highscore(
 }
 
 #[tauri::command]
-async fn check_local_ip_region() -> bool {
+async fn check_local_ip_region(app: AppHandle) -> bool {
     // --- 第一步：使用 public-ip 库获取公网 IP ---
     // addr() 会从可用的外部服务解析当前公网 IP
     let ip = match public_ip::addr().await {
@@ -1159,7 +1176,16 @@ async fn check_local_ip_region() -> bool {
 
     // --- 第二步：本地判断逻辑 (GeoLite2) ---
     // 提示：你需要下载 GeoLite2-Country.mmdb 并放在项目目录下
-    let reader = match maxminddb::Reader::open_readfile("resources/GeoLite2-Country.mmdb") {
+    let geoip_path = app
+        .path()
+        .resolve("resources/GeoLite2-Country.mmdb", BaseDirectory::Resource)
+        .ok()
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("resources/GeoLite2-Country.mmdb")
+        });
+    let reader = match maxminddb::Reader::open_readfile(geoip_path) {
         Ok(r) => r,
         Err(_) => return false,
     };
@@ -1203,14 +1229,17 @@ fn open_external_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn submit_game_application(payload: SubmitGameApplicationPayload) -> Result<(), String> {
+async fn submit_game_application(
+    app: AppHandle,
+    payload: SubmitGameApplicationPayload,
+) -> Result<(), String> {
     let name = payload.name.trim().to_string();
     let link = payload.link.trim().to_string();
     if name.is_empty() || link.is_empty() {
         return Err("game name and download link are required".to_string());
     }
 
-    let config = load_local_config()?;
+    let config = load_local_config(Some(&app))?;
     let webhook_url = config.wecom_webhook_url;
     if webhook_url.trim().is_empty() {
         return Err("Missing WeCom webhook url".to_string());
