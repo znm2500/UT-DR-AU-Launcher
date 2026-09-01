@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" href="./favicon.ico" type="image/x-icon" />
+<title>AU Launcher</title>
+<style>
+  /* ============ Font (fzxs) ============ */
+  @font-face {
+    font-family: 'fzxs';
+    src: url('./fzxs.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  /* ============ CSS Variables & Reset ============ */
+  :root {
+    --bg: #000000;
+    --bg-soft: #0a0a0a;
+    --bg-card: #000000;
+    --bg-card-hover: #0d0d0d;
+    --border: #ffffff;
+    --border-width: 5px;
+    --text: #ffffff;
+    --text-soft: #e0e0e0;
+    --text-mute: #a8a8a8;
+    --accent: #ffffff;
+    --btn-bg: #000000;
+    --btn-text: #ffffff;
+    --btn-hover-bg: #141414;
+    --tag-bg: #000000;
+    --input-bg: #000000;
+    --shadow: 0 4px 24px rgba(255, 255, 255, 0.06);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'fzxs', 'Microsoft YaHei', 'PingFang SC', 'Segoe UI', sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+  input { font-family: inherit; }
+
+  .app {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 36px 32px 88px;
+  }
+
+  /* ============ Header ============ */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .brand-logo {
+    width: 56px;
+    height: 56px;
+    flex-shrink: 0;
+    object-fit: contain;
+    user-select: none;
+    transition: filter 0.18s ease;
+  }
+
+  .brand-logo:hover {
+    filter: drop-shadow(0 0 6px #FFFF00);
+  }
+
+  .brand-title {
+    font-size: 32px;
+    font-weight: 400;
+    letter-spacing: 2px;
+    color: var(--text);
+    font-family: 'fzxs', sans-serif;
+  }
+
+  .brand-subtitle {
+    font-size: 12px;
+    color: var(--text-mute);
+    margin-top: 4px;
+    letter-spacing: 3px;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex: 1;
+    min-width: 300px;
+    justify-content: flex-end;
+  }
+
+  .search-wrap {
+    position: relative;
+    flex: 1;
+    max-width: 540px;
+  }
+
+  .search-input {
+    width: 100%;
+    padding: 14px 18px 14px 50px;
+    background: var(--input-bg);
+    border: var(--border-width) solid var(--border);
+    border-radius: 0;
+    color: var(--text);
+    font-size: 16px;
+    font-family: 'fzxs', sans-serif;
+    outline: none;
+    transition: background 0.18s ease;
+  }
+
+  .search-input:focus {
+    background: #0a0a0a;
+  }
+
+  .search-input::placeholder {
+    color: var(--text-mute);
+    letter-spacing: 1px;
+  }
+
+  .search-icon {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    color: var(--text-mute);
+    pointer-events: none;
+  }
+
+  .announcement {
+    background: #000000;
+    border: var(--border-width) solid var(--border);
+    border-radius: 0;
+    padding: 12px 18px;
+    font-size: 14px;
+    color: var(--text-soft);
+    max-width: 380px;
+    display: none;
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 1px;
+  }
+
+  .announcement.visible { display: block; }
+
+  /* ============ Group Tabs ============ */
+  .tabs {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 26px;
+    padding-bottom: 2px;
+    overflow-x: auto;
+  }
+
+  .tab {
+    padding: 12px 26px;
+    font-size: 16px;
+    font-family: 'fzxs', sans-serif;
+    color: var(--text);
+    letter-spacing: 2px;
+    background: var(--btn-bg);
+    border: var(--border-width) solid var(--border);
+    border-radius: 0;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.18s ease;
+    user-select: none;
+  }
+
+  .tab:hover {
+    border-color: #FFFF00;
+    color: #FFFF00;
+  }
+
+  .tab.active {
+    background: #ffffff;
+    color: #000000;
+    font-weight: 400;
+  }
+
+  .stats-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 22px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .stats-text {
+    font-size: 14px;
+    color: var(--text-mute);
+    letter-spacing: 1px;
+    font-family: 'fzxs', sans-serif;
+  }
+
+  .stats-text strong {
+    color: var(--text);
+    font-weight: 400;
+  }
+
+  /* ============ Game Grid ============ */
+  .game-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 20px;
+  }
+
+  @media (max-width: 520px) { .game-grid { grid-template-columns: 1fr; } }
+
+  .game-card {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-card);
+    border: var(--border-width) solid var(--border);
+    border-radius: 0;
+    transition: all 0.2s ease;
+    overflow: hidden;
+  }
+
+  .game-card:hover {
+    background: var(--bg-card-hover);
+    transform: translateY(-3px);
+    box-shadow: var(--shadow);
+  }
+
+  /* 横向封面 */
+  .card-cover-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-bottom: var(--border-width) solid var(--border);
+    background: #050505;
+    overflow: hidden;
+  }
+
+  .card-cover {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.35s ease;
+    user-select: none;
+  }
+
+  .game-card:hover .card-cover { transform: scale(1.04); }
+
+  .cover-missing {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-mute);
+    font-size: 13px;
+    text-align: center;
+    padding: 12px;
+    background:
+      repeating-linear-gradient(
+        45deg, #050505, #050505 8px,
+        #101010 8px, #101010 16px
+      );
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 1px;
+  }
+
+  /* 卡片内容区域 */
+  .card-body {
+    padding: 16px 18px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+  }
+
+  .game-name {
+    font-size: 20px;
+    color: var(--text);
+    line-height: 1.3;
+    word-break: break-word;
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 1px;
+  }
+
+  .game-meta {
+    font-size: 13px;
+    color: var(--text-soft);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 2px;
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 0.5px;
+  }
+
+  .meta-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .meta-label {
+    color: var(--text-mute);
+    font-size: 12px;
+    letter-spacing: 1.5px;
+  }
+
+  .meta-value {
+    color: var(--text-soft);
+  }
+
+  .engine-tag {
+    display: inline;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--text-soft);
+    font-size: 12px;
+    line-height: 1.5;
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 1px;
+  }
+
+  .card-footer {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .badges {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .hot-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--text);
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 1px;
+  }
+
+  .date-badge {
+    font-size: 12px;
+    color: var(--text-mute);
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 1px;
+  }
+
+  .download-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 20px;
+    background: var(--btn-bg);
+    color: var(--btn-text);
+    font-size: 15px;
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 2px;
+    border: var(--border-width) solid var(--border);
+    border-radius: 0;
+    transition: all 0.18s ease;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .download-btn:hover {
+    border-color: #FFFF00;
+    color: #FFFF00;
+  }
+
+  .download-btn:active { transform: translateY(1px); }
+
+  .download-btn svg { flex-shrink: 0; }
+
+  /* ============ States ============ */
+  .state-box {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 90px 24px;
+    color: var(--text-mute);
+    background: #000000;
+    border: var(--border-width) solid var(--border);
+  }
+
+  .state-title {
+    font-size: 22px;
+    color: var(--text);
+    margin-bottom: 10px;
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 2px;
+  }
+
+  .state-desc {
+    font-size: 14px;
+    max-width: 440px;
+    margin: 0 auto;
+    color: var(--text-mute);
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 1px;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 32px;
+    height: 32px;
+    border: 3px solid #1a1a1a;
+    border-top-color: #ffffff;
+    border-radius: 0;
+    animation: spin 0.9s linear infinite;
+    margin-bottom: 20px;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ============ Footer ============ */
+  .footer {
+    margin-top: 70px;
+    padding-top: 30px;
+    border-top: var(--border-width) solid var(--border);
+    text-align: center;
+    color: var(--text-mute);
+    font-size: 13px;
+    letter-spacing: 1.5px;
+    line-height: 2;
+    font-family: 'fzxs', sans-serif;
+  }
+
+  .footer a {
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    transition: opacity 0.18s ease;
+  }
+
+  .footer a:hover { opacity: 0.7; }
+
+  .footer .motto {
+    margin-top: 10px;
+    font-size: 14px;
+    color: var(--text-soft);
+    letter-spacing: 3px;
+  }
+
+  /* ============ Scrollbar ============ */
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
+  ::-webkit-scrollbar-track { background: #000000; }
+  ::-webkit-scrollbar-thumb {
+    background: #000000;
+    border: 3px solid #ffffff;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: #181818; }
+
+  .fade-in { animation: fadeIn 0.35s ease both; }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="brand">
+      <img class="brand-logo" src="./logo.png" alt="AU Launcher Logo" />
+      <div>
+        <div class="brand-title">AU LAUNCHER</div>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input id="searchInput" type="text" class="search-input" placeholder="搜索游戏名 / 作者 / 引擎" />
+      </div>
+      <div id="announcement" class="announcement"></div>
+    </div>
+  </header>
+
+  <!-- Tabs -->
+  <nav class="tabs" id="tabs" role="tablist">
+    <div class="tab active" data-sort="all" data-i18n="tab_all">全部</div>
+    <div class="tab" data-sort="hot" data-i18n="tab_hot">最热</div>
+    <div class="tab" data-sort="new" data-i18n="tab_new">最新</div>
+    <div class="tab" data-sort="name" data-i18n="tab_name">名称</div>
+  </nav>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div id="statsText" class="stats-text">加载中...</div>
+  </div>
+
+  <!-- Grid -->
+  <main id="gameGrid" class="game-grid">
+    <div class="state-box">
+      <div class="spinner"></div>
+      <div class="state-title">正在加载游戏列表</div>
+      <div class="state-desc">请稍候...</div>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div>
+      <span id="footerRepo">AU LAUNCHER</span>
+      <a href="https://github.com/znm2500/UT-DR-AU-Launcher" target="_blank" rel="noopener">GITHUB</a>
+    </div>
+    <div class="motto" id="footerMotto">* 保持你的决心</div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Locale Detection ----------
+  function detectLocale() {
+    try {
+      var tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      if (/Asia\/(Shanghai|Hong_Kong|Taipei|Macau|Singapore|Chongqing|Urumqi|Harbin)/.test(tz)) return 'zh';
+      if (/America\/|Europe\/|Australia\/|Pacific\/Auckland/.test(tz)) return 'en';
+    } catch (e) {}
+    var navLang = (navigator.language || navigator.languages && navigator.languages[0] || '').toLowerCase();
+    if (navLang.startsWith('zh')) return 'zh';
+    if (navLang.startsWith('en')) return 'en';
+    return 'en';
+  }
+
+  var LANG = detectLocale();
+
+  // ---------- i18n ----------
+  var I18N = {
+    zh: {
+      search_placeholder: '搜索游戏名 / 作者 / 引擎',
+      tab_all: '全部',
+      tab_hot: '最热',
+      tab_new: '最新',
+      tab_name: '名称',
+      loading: '加载中...',
+      loading_games: '正在加载游戏列表',
+      loading_desc: '请稍候...',
+      footer_repo: 'AU LAUNCHER',
+      footer_powered: '由',
+      footer_motto: '* 保持你的决心',
+      stats_total: '共 <strong>{total}</strong> 款游戏',
+      stats_found: '找到 <strong>{shown}</strong> / 共 {total} 款游戏 &nbsp;·&nbsp; 搜索: "{query}"',
+      sort_hot: ' · 按 <strong style="color:var(--text)">最热</strong> 排序',
+      sort_new: ' · 按 <strong style="color:var(--text)">最新</strong> 排序',
+      sort_name: ' · 按 <strong style="color:var(--text)">名称 A-Z</strong> 排序',
+      no_games_title: '未找到游戏',
+      no_games_desc: '试试其他关键词，或切换排序方式查看全部。',
+      load_failed_title: '加载失败',
+      meta_by: '作者',
+      meta_engine: '引擎',
+      hot_label: '热度',
+      download: '下载',
+      cover_missing: '封面',
+      unknown: '未知'
+    },
+    en: {
+      search_placeholder: 'SEARCH NAME / AUTHOR / ENGINE',
+      tab_all: 'ALL',
+      tab_hot: 'HOT',
+      tab_new: 'NEW',
+      tab_name: 'A-Z',
+      loading: 'LOADING...',
+      loading_games: 'LOADING GAMES',
+      loading_desc: 'PLEASE WAIT...',
+      footer_repo: 'AU LAUNCHER',
+      footer_powered: 'POWERED BY',
+      footer_motto: '* STAY DETERMINED',
+      stats_total: '<strong>{total}</strong> GAMES IN TOTAL',
+      stats_found: 'FOUND <strong>{shown}</strong> / {total} GAMES &nbsp;·&nbsp; QUERY: "{query}"',
+      sort_hot: ' · SORTED BY <strong style="color:var(--text)">HOT</strong>',
+      sort_new: ' · SORTED BY <strong style="color:var(--text)">NEWEST</strong>',
+      sort_name: ' · SORTED BY <strong style="color:var(--text)">NAME A-Z</strong>',
+      no_games_title: 'NO GAMES FOUND',
+      no_games_desc: 'TRY A DIFFERENT KEYWORD OR SWITCH SORT MODE.',
+      load_failed_title: 'LOAD FAILED',
+      meta_by: 'BY',
+      meta_engine: 'ENGINE',
+      hot_label: 'HOT',
+      download: 'DOWNLOAD',
+      cover_missing: 'COVER',
+      unknown: 'UNKNOWN'
+    }
+  };
+
+  function t(key) {
+    var str = (I18N[LANG] && I18N[LANG][key]) || I18N.en[key] || key;
+    for (var i = 1; i < arguments.length; i++) {
+      str = str.replace(/\{[^}]+\}/, arguments[i]);
+    }
+    return str;
+  }
+
+  function applyI18n() {
+    var els = document.querySelectorAll('[data-i18n]');
+    for (var i = 0; i < els.length; i++) {
+      var key = els[i].getAttribute('data-i18n');
+      els[i].textContent = t(key);
+    }
+    var attrs = document.querySelectorAll('[data-i18n-attr]');
+    for (var j = 0; j < attrs.length; j++) {
+      var pair = attrs[j].getAttribute('data-i18n-attr').split(':');
+      attrs[j].setAttribute(pair[0], t(pair[1]));
+    }
+    var si = document.getElementById('searchInput');
+    if (si) si.placeholder = t('search_placeholder');
+    var fr = document.getElementById('footerRepo');
+    if (fr) fr.textContent = t('footer_repo');
+    var fp = document.getElementById('footerPowered');
+    if (fp) fp.textContent = t('footer_powered');
+    var fm = document.getElementById('footerMotto');
+    if (fm) fm.textContent = t('footer_motto');
+    document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
+  }
+
+  if (document.readyState !== 'loading') {
+    applyI18n();
+  } else {
+    document.addEventListener('DOMContentLoaded', applyI18n);
+  }
+
+  // ---------- Config ----------
+  const GITHUB_OWNER = 'znm2500';
+  const GITHUB_REPO  = 'AU-Launcher-Repo';
+  const GITHUB_BRANCH = 'data';   // 资源分支：图片和 config.json 都放在 data 分支
+  const GITCODE_RELEASE_OWNER = 'znm1145';
+
+  // ---------- State ----------
+  const state = {
+    games: [], sort: 'all', search: '', version: '0.1.0',
+    announcement: { en: '', zh: '' }
+  };
+
+  // ---------- DOM ----------
+  const $grid   = document.getElementById('gameGrid');
+  const $stats  = document.getElementById('statsText');
+  const $search = document.getElementById('searchInput');
+  const $tabs   = document.getElementById('tabs');
+  const $ann    = document.getElementById('announcement');
+
+  // ---------- Helpers ----------
+  function getLocalizedName(obj) {
+    if (!obj) return '';
+    if (obj[LANG]) return obj[LANG];
+    if (obj[LANG === 'zh' ? 'zh_Hans' : 'en']) return obj[LANG === 'zh' ? 'zh_Hans' : 'en'];
+    for (var k in obj) if (obj[k]) return obj[k];
+    return '';
+  }
+
+  function getCoverSrc(game) {
+    const candidates = [];
+    if (game.img && typeof game.img === 'string') {
+      if (/^https?:\/\//i.test(game.img)) candidates.push(game.img);
+      else candidates.push('./' + game.img);
+    }
+    // 从 data 分支加载图片
+    candidates.push('https://cdn.jsdelivr.net/gh/' + GITHUB_OWNER + '/' + GITHUB_REPO + '@' + GITHUB_BRANCH + '/' + game.id + '.webp');
+    candidates.push('https://raw.githubusercontent.com/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/' + GITHUB_BRANCH + '/' + game.id + '.webp');
+    return candidates;
+  }
+
+  function buildDownloadUrls(game) {
+    const explicit = (game.download_url && game.download_url.trim()) || '';
+    const version = game.version || state.version || '0.1.0';
+    const github = 'https://github.com/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/releases/download/v' + version + '/' + encodeURIComponent(game.id) + '.7z';
+    const gitcode = 'https://gitcode.com/' + GITCODE_RELEASE_OWNER + '/' + GITHUB_REPO + '/releases/download/v' + version + '/' + encodeURIComponent(game.id) + '.7z';
+    const out = [];
+    if (explicit) out.push(explicit);
+    if (LANG === 'zh') {
+      out.push(gitcode);
+      out.push(github);
+    } else {
+      out.push(github);
+      out.push(gitcode);
+    }
+    return out;
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.getFullYear() + '.' +
+      String(d.getMonth() + 1).padStart(2, '0') + '.' +
+      String(d.getDate()).padStart(2, '0');
+  }
+
+  function getHeat(g) {
+    const s = Number(g.hot_score);
+    return Number.isFinite(s) ? s : 0;
+  }
+  function getPublishTs(g) {
+    const p = Date.parse(String(g.publish_time || ''));
+    return Number.isFinite(p) ? p : 0;
+  }
+
+  function filteredSortedGames() {
+    const q = state.search.trim().toLowerCase();
+    let list = state.games.filter(function (g) {
+      if (!q) return true;
+      const hay = [getLocalizedName(g.name), getLocalizedName(g.author), g.engine || '', g.id || '']
+        .join(' \u0001 ').toLowerCase();
+      return hay.indexOf(q) !== -1;
+    });
+    switch (state.sort) {
+      case 'hot':  list.sort(function (a, b) { return getHeat(b) - getHeat(a); }); break;
+      case 'new':  list.sort(function (a, b) { return getPublishTs(b) - getPublishTs(a); }); break;
+      case 'name': list.sort(function (a, b) {
+        const na = getLocalizedName(a.name).toLowerCase();
+        const nb = getLocalizedName(b.name).toLowerCase();
+        return na.localeCompare(nb, undefined, { numeric: true, sensitivity: 'base' });
+      }); break;
+    }
+    return list;
+  }
+
+  // ---------- Render ----------
+  function render() {
+    const list = filteredSortedGames();
+    const total = state.games.length;
+    const shown = list.length;
+
+    if (state.search) {
+      $stats.innerHTML = t('stats_found', state.search, shown, total);
+    } else {
+      var sortHint = '';
+      if (state.sort === 'hot')  sortHint = t('sort_hot');
+      else if (state.sort === 'new')  sortHint = t('sort_new');
+      else if (state.sort === 'name') sortHint = t('sort_name');
+      $stats.innerHTML = t('stats_total', total) + sortHint;
+    }
+
+    if (list.length === 0) {
+      $grid.innerHTML =
+        '<div class="state-box fade-in">' +
+          '<div class="state-title">' + t('no_games_title') + '</div>' +
+          '<div class="state-desc">' + t('no_games_desc') + '</div>' +
+        '</div>';
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    list.forEach(function (game, idx) { frag.appendChild(renderCard(game, idx)); });
+    $grid.innerHTML = '';
+    $grid.appendChild(frag);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+
+  function renderCard(game, idx) {
+    const card = document.createElement('div');
+    card.className = 'game-card fade-in';
+    card.style.animationDelay = Math.min(idx * 0.012, 0.4) + 's';
+
+    const name   = getLocalizedName(game.name) || game.id || t('unknown');
+    const author = getLocalizedName(game.author);
+    const engine = game.engine;
+    const date   = formatDate(game.publish_time);
+    const heat   = getHeat(game);
+    const covers = getCoverSrc(game);
+    const dlUrls = buildDownloadUrls(game);
+
+    const metaHtml = [];
+    if (author) metaHtml.push(
+      '<div class="meta-row"><span class="meta-label">' + t('meta_by') + '</span><span class="meta-value">' + escapeHtml(author) + '</span></div>'
+    );
+    if (engine) metaHtml.push(
+      '<div class="meta-row"><span class="meta-label">' + t('meta_engine') + '</span><span class="engine-tag">' + escapeHtml(engine) + '</span></div>'
+    );
+
+    var badges = [];
+    if (heat > 0) badges.push('<span class="hot-badge">' + t('hot_label') + ' ' + heat + '</span>');
+    if (date) badges.push('<span class="date-badge">' + date + '</span>');
+
+    const dlPrimary = dlUrls[0];
+
+    card.innerHTML =
+      '<div class="card-cover-wrap">' + renderCoverElement(covers, name) + '</div>' +
+      '<div class="card-body">' +
+        '<div class="game-name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</div>' +
+        '<div class="game-meta">' + metaHtml.join('') + '</div>' +
+        '<div class="card-footer">' +
+          '<div class="badges">' + badges.join('') + '</div>' +
+          '<button class="download-btn" data-dl-primary="' + escapeHtml(dlPrimary) + '">' +
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+              '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>' +
+              '<polyline points="7 10 12 15 17 10"/>' +
+              '<line x1="12" y1="15" x2="12" y2="3"/>' +
+            '</svg>' +
+            t('download') +
+          '</button>' +
+        '</div>' +
+      '</div>';
+
+    var imgEl = card.querySelector('img.card-cover[data-covers]');
+    if (imgEl) {
+      try {
+        var cands = JSON.parse(imgEl.getAttribute('data-covers'));
+        imgEl.removeAttribute('data-covers');
+        imgEl._coverIdx = 0;
+        imgEl._covers = cands;
+        imgEl.onerror = function () {
+          this._coverIdx = (this._coverIdx || 0) + 1;
+          if (this._coverIdx < this._covers.length) {
+            this.src = this._covers[this._coverIdx];
+          } else {
+            var parent = this.parentNode;
+            if (parent) {
+              var div = document.createElement('div');
+              div.className = 'cover-missing';
+              div.textContent = (name || t('cover_missing')).toUpperCase();
+              parent.innerHTML = '';
+              parent.appendChild(div);
+            }
+          }
+        };
+      } catch (_) {}
+    }
+
+    var dlBtn = card.querySelector('.download-btn');
+    if (dlBtn) dlBtn.addEventListener('click', onDownloadClick);
+    return card;
+  }
+
+  function renderCoverElement(candidates, name) {
+    var first = candidates[0] || '';
+    var safeList = JSON.stringify(candidates);
+    return '<img class="card-cover" loading="lazy" src="' + escapeHtml(first) + '" alt="' + escapeHtml(name) + '" data-covers="' + escapeHtml(safeList) + '" />';
+  }
+
+  function onDownloadClick(e) {
+    var btn = e.currentTarget;
+    var primary = btn.getAttribute('data-dl-primary');
+    if (!primary) return;
+    window.open(primary, '_blank', 'noopener');
+    btn.style.transform = 'scale(0.96)';
+    setTimeout(function () { btn.style.transform = ''; }, 120);
+  }
+
+  // ---------- Load Data ----------
+  async function loadConfig() {
+    var urls = [
+      './config.json?_=' + Date.now(),
+      // 备用：从 data 分支加载 config.json
+      'https://cdn.jsdelivr.net/gh/' + GITHUB_OWNER + '/' + GITHUB_REPO + '@' + GITHUB_BRANCH + '/config.json'
+    ];
+    var data = null;
+    var lastError = null;
+    for (var i = 0; i < urls.length; i++) {
+      try {
+        var res = await fetch(urls[i], { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var json = await res.json();
+        if (json && typeof json === 'object' && Array.isArray(json.games) && json.games.length > 0) {
+          data = json;
+          break;
+        }
+      } catch (err) {
+        lastError = err;
+        // 继续尝试下一个 URL
+      }
+    }
+
+    if (!data) {
+      throw new Error(lastError ? lastError.message : '无法加载 config.json，且没有备用数据。');
+    }
+
+    state.games = data.games.map(normalizeGame);
+    state.version = data.newest_version || state.version;
+    if (data.announcement) state.announcement = data.announcement;
+    return 'remote';
+  }
+
+  function normalizeGame(g) {
+    var norm = Object.assign({}, g);
+    if (norm.name   && typeof norm.name   !== 'object') norm.name   = { en: norm.name,   zh: norm.name };
+    if (norm.author && typeof norm.author !== 'object') norm.author = { en: norm.author, zh: norm.author };
+    return norm;
+  }
+
+  function showAnnouncement() {
+    var text = state.announcement[LANG];
+    if (!text || !text.trim()) { $ann.classList.remove('visible'); return; }
+    $ann.textContent = text;
+    $ann.classList.add('visible');
+  }
+
+  // ---------- Events ----------
+  var searchTimer = 0;
+  $search.addEventListener('input', function () {
+    clearTimeout(searchTimer);
+    var val = $search.value;
+    searchTimer = setTimeout(function () { state.search = val; render(); }, 120);
+  });
+
+  $tabs.addEventListener('click', function (e) {
+    var tab = e.target.closest('.tab');
+    if (!tab) return;
+    var sort = tab.getAttribute('data-sort');
+    if (!sort || sort === state.sort) return;
+    state.sort = sort;
+    $tabs.querySelectorAll('.tab').forEach(function (t) {
+      t.classList.toggle('active', t === tab);
+    });
+    render();
+  });
+
+  // ---------- Bootstrap ----------
+  (async function boot() {
+    try {
+      await loadConfig();
+      showAnnouncement();
+      render();
+    } catch (e) {
+      console.error('[AU-Repo] Boot error:', e);
+      $grid.innerHTML =
+        '<div class="state-box fade-in">' +
+          '<div class="state-title">' + t('load_failed_title') + '</div>' +
+          '<div class="state-desc">' + escapeHtml(String(e && e.message || e)) + '</div>' +
+        '</div>';
+    }
+  })();
+})();
+</script>
+</body>
+</html>
