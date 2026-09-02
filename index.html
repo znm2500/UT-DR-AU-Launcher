@@ -164,6 +164,33 @@
 
   .announcement.visible { display: block; }
 
+  /* ---------- 语言切换按钮 ---------- */
+  .lang-switch {
+    display: flex;
+    gap: 4px;
+    border: var(--border-width) solid var(--border);
+    background: #000;
+    padding: 2px;
+  }
+  .lang-btn {
+    padding: 6px 12px;
+    font-size: 13px;
+    font-family: 'fzxs', sans-serif;
+    letter-spacing: 1px;
+    background: transparent;
+    color: var(--text-mute);
+    border: none;
+    transition: all 0.18s ease;
+    cursor: pointer;
+  }
+  .lang-btn.active {
+    background: #fff;
+    color: #000;
+  }
+  .lang-btn:hover:not(.active) {
+    color: #FFFF00;
+  }
+
   /* ============ Group Tabs ============ */
   .tabs {
     display: flex;
@@ -511,6 +538,11 @@
         </svg>
         <input id="searchInput" type="text" class="search-input" placeholder="搜索游戏名 / 作者 / 引擎" />
       </div>
+      <!-- 语言切换按钮 -->
+      <div class="lang-switch" id="langSwitch">
+        <button class="lang-btn" data-lang="zh">中文</button>
+        <button class="lang-btn" data-lang="en">English</button>
+      </div>
       <div id="announcement" class="announcement"></div>
     </div>
   </header>
@@ -551,8 +583,24 @@
 (function () {
   'use strict';
 
-  // ---------- Locale Detection ----------
+  // ---------- 地区检测（用于下载源，独立于语言） ----------
+  function detectRegion() {
+    try {
+      var tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      // 中国时区列表
+      if (/Asia\/(Shanghai|Hong_Kong|Taipei|Macau|Singapore|Chongqing|Urumqi|Harbin)/.test(tz)) {
+        return 'cn';
+      }
+    } catch (e) {}
+    return 'global'; // 默认国际
+  }
+
+  // ---------- 语言检测（用于界面文字） ----------
   function detectLocale() {
+    // 优先从 localStorage 读取用户偏好
+    var saved = localStorage.getItem('au_launcher_lang');
+    if (saved === 'zh' || saved === 'en') return saved;
+
     try {
       var tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
       if (/Asia\/(Shanghai|Hong_Kong|Taipei|Macau|Singapore|Chongqing|Urumqi|Harbin)/.test(tz)) return 'zh';
@@ -564,7 +612,9 @@
     return 'en';
   }
 
-  var LANG = detectLocale();
+  // ---------- 全局变量 ----------
+  var LANG = detectLocale();          // 当前界面语言
+  var REGION = detectRegion();        // 当前地区（cn / global），用于下载源
 
   // ---------- i18n ----------
   var I18N = {
@@ -632,6 +682,7 @@
     return str;
   }
 
+  // 更新所有静态文本（非动态卡片部分）
   function applyI18n() {
     var els = document.querySelectorAll('[data-i18n]');
     for (var i = 0; i < els.length; i++) {
@@ -652,18 +703,18 @@
     var fm = document.getElementById('footerMotto');
     if (fm) fm.textContent = t('footer_motto');
     document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
+
+    // 更新语言按钮高亮
+    var btns = document.querySelectorAll('.lang-btn');
+    btns.forEach(function (btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-lang') === LANG);
+    });
   }
 
-  if (document.readyState !== 'loading') {
-    applyI18n();
-  } else {
-    document.addEventListener('DOMContentLoaded', applyI18n);
-  }
-
-  // ---------- Config ----------
+  // ---------- 配置 ----------
   const GITHUB_OWNER = 'znm2500';
   const GITHUB_REPO  = 'AU-Launcher-Repo';
-  const GITHUB_BRANCH = 'data';   // 资源分支：图片和 config.json 都放在 data 分支
+  const GITHUB_BRANCH = 'data';
   const GITCODE_RELEASE_OWNER = 'znm1145';
 
   // ---------- State ----------
@@ -688,18 +739,15 @@
     return '';
   }
 
+  // 图片直接使用 CDN
   function getCoverSrc(game) {
-    const candidates = [];
-    if (game.img && typeof game.img === 'string') {
-      if (/^https?:\/\//i.test(game.img)) candidates.push(game.img);
-      else candidates.push('./' + game.img);
+    if (game.img && typeof game.img === 'string' && /^https?:\/\//i.test(game.img)) {
+      return [game.img];
     }
-    // 从 data 分支加载图片
-    candidates.push('https://cdn.jsdelivr.net/gh/' + GITHUB_OWNER + '/' + GITHUB_REPO + '@' + GITHUB_BRANCH + '/' + game.id + '.webp');
-    candidates.push('https://raw.githubusercontent.com/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/' + GITHUB_BRANCH + '/' + game.id + '.webp');
-    return candidates;
+    return ['https://cdn.jsdelivr.net/gh/' + GITHUB_OWNER + '/' + GITHUB_REPO + '@' + GITHUB_BRANCH + '/' + game.id + '.webp'];
   }
 
+  // ---------- 下载链接生成（根据地区 REGION，与语言无关） ----------
   function buildDownloadUrls(game) {
     const explicit = (game.download_url && game.download_url.trim()) || '';
     const version = game.version || state.version || '0.1.0';
@@ -707,7 +755,8 @@
     const gitcode = 'https://gitcode.com/' + GITCODE_RELEASE_OWNER + '/' + GITHUB_REPO + '/releases/download/v' + version + '/' + encodeURIComponent(game.id) + '.7z';
     const out = [];
     if (explicit) out.push(explicit);
-    if (LANG === 'zh') {
+    // 根据地区决定优先顺序
+    if (REGION === 'cn') {
       out.push(gitcode);
       out.push(github);
     } else {
@@ -837,29 +886,18 @@
         '</div>' +
       '</div>';
 
-    var imgEl = card.querySelector('img.card-cover[data-covers]');
+    var imgEl = card.querySelector('img.card-cover');
     if (imgEl) {
-      try {
-        var cands = JSON.parse(imgEl.getAttribute('data-covers'));
-        imgEl.removeAttribute('data-covers');
-        imgEl._coverIdx = 0;
-        imgEl._covers = cands;
-        imgEl.onerror = function () {
-          this._coverIdx = (this._coverIdx || 0) + 1;
-          if (this._coverIdx < this._covers.length) {
-            this.src = this._covers[this._coverIdx];
-          } else {
-            var parent = this.parentNode;
-            if (parent) {
-              var div = document.createElement('div');
-              div.className = 'cover-missing';
-              div.textContent = (name || t('cover_missing')).toUpperCase();
-              parent.innerHTML = '';
-              parent.appendChild(div);
-            }
-          }
-        };
-      } catch (_) {}
+      imgEl.onerror = function () {
+        var parent = this.parentNode;
+        if (parent) {
+          var div = document.createElement('div');
+          div.className = 'cover-missing';
+          div.textContent = (name || t('cover_missing')).toUpperCase();
+          parent.innerHTML = '';
+          parent.appendChild(div);
+        }
+      };
     }
 
     var dlBtn = card.querySelector('.download-btn');
@@ -869,8 +907,7 @@
 
   function renderCoverElement(candidates, name) {
     var first = candidates[0] || '';
-    var safeList = JSON.stringify(candidates);
-    return '<img class="card-cover" loading="lazy" src="' + escapeHtml(first) + '" alt="' + escapeHtml(name) + '" data-covers="' + escapeHtml(safeList) + '" />';
+    return '<img class="card-cover" loading="lazy" src="' + escapeHtml(first) + '" alt="' + escapeHtml(name) + '" />';
   }
 
   function onDownloadClick(e) {
@@ -882,38 +919,22 @@
     setTimeout(function () { btn.style.transform = ''; }, 120);
   }
 
-  // ---------- Load Data ----------
+  // ---------- Load Data (仅通过 CDN) ----------
   async function loadConfig() {
-    var urls = [
-      './config.json?_=' + Date.now(),
-      // 备用：从 data 分支加载 config.json
-      'https://cdn.jsdelivr.net/gh/' + GITHUB_OWNER + '/' + GITHUB_REPO + '@' + GITHUB_BRANCH + '/config.json'
-    ];
-    var data = null;
-    var lastError = null;
-    for (var i = 0; i < urls.length; i++) {
-      try {
-        var res = await fetch(urls[i], { cache: 'no-store' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        var json = await res.json();
-        if (json && typeof json === 'object' && Array.isArray(json.games) && json.games.length > 0) {
-          data = json;
-          break;
-        }
-      } catch (err) {
-        lastError = err;
-        // 继续尝试下一个 URL
+    const url = 'https://cdn.jsdelivr.net/gh/' + GITHUB_OWNER + '/' + GITHUB_REPO + '@' + GITHUB_BRANCH + '/config.json?_=' + Date.now();
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const json = await res.json();
+      if (!json || typeof json !== 'object' || !Array.isArray(json.games) || json.games.length === 0) {
+        throw new Error('Invalid config format');
       }
+      state.games = json.games.map(normalizeGame);
+      state.version = json.newest_version || state.version;
+      if (json.announcement) state.announcement = json.announcement;
+    } catch (err) {
+      throw new Error('无法从 CDN 加载 config.json: ' + err.message);
     }
-
-    if (!data) {
-      throw new Error(lastError ? lastError.message : '无法加载 config.json，且没有备用数据。');
-    }
-
-    state.games = data.games.map(normalizeGame);
-    state.version = data.newest_version || state.version;
-    if (data.announcement) state.announcement = data.announcement;
-    return 'remote';
   }
 
   function normalizeGame(g) {
@@ -928,6 +949,23 @@
     if (!text || !text.trim()) { $ann.classList.remove('visible'); return; }
     $ann.textContent = text;
     $ann.classList.add('visible');
+  }
+
+  // ---------- 语言切换事件 ----------
+  function setupLangSwitch() {
+    var btns = document.querySelectorAll('.lang-btn');
+    btns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var lang = this.getAttribute('data-lang');
+        if (lang === LANG) return;
+        LANG = lang;
+        localStorage.setItem('au_launcher_lang', lang);
+        // 更新界面
+        applyI18n();
+        showAnnouncement();        // 公告文本更新
+        render();                 // 重新绘制所有卡片
+      });
+    });
   }
 
   // ---------- Events ----------
@@ -954,6 +992,8 @@
   (async function boot() {
     try {
       await loadConfig();
+      applyI18n();               // 初始化静态文本和语言按钮高亮
+      setupLangSwitch();
       showAnnouncement();
       render();
     } catch (e) {
